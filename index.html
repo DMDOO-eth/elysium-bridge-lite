@@ -129,6 +129,7 @@
       <div class="detailsBody">
         <p class="small">We scan Hyperliquid's HyperEVM-linked token contracts and keep the ones this wallet actually holds. Read-only: no signature, no transaction.</p>
         <button id="betaScanBtn" class="secondary wide" disabled>Scan my HyperEVM tokens</button>
+        <div id="scanCacheMeta" class="small" style="margin-top:7px">No saved scan yet.</div>
         <div id="scanLive" class="scanLive" hidden>
           <span class="spinner" aria-hidden="true"></span>
           <span id="scanLiveText">Scanning contracts… this can take a minute.</span>
@@ -419,6 +420,95 @@
     el('useReturnHistoryBtn').disabled=true;
   }
 
+  function scanCacheKey() {
+    return account ? 'elysium-bridge-lite:scan:'+account.toLowerCase() : null;
+  }
+
+  function getScanCache() {
+    try {
+      const key=scanCacheKey();
+      if (!key) return null;
+      const value=JSON.parse(localStorage.getItem(key) || 'null');
+      if (!value || !Array.isArray(value.tokens) || !Number.isFinite(value.scannedAt)) return null;
+      return value;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function saveScanCache(tokens) {
+    try {
+      const key=scanCacheKey();
+      if (!key) return;
+      const clean=tokens.map(t=>({
+        addr:t.addr,
+        symbol:t.symbol || t.name || 'TOKEN',
+        decimals:Number.isFinite(Number(t.decimals)) ? Number(t.decimals) : 18
+      }));
+      localStorage.setItem(key,JSON.stringify({
+        scannedAt:Date.now(),
+        tokens:clean
+      }));
+      renderScanCacheMeta();
+    } catch(e) {
+      debugLog('scan cache save failed',parseErr(e));
+    }
+  }
+
+  function formatScanDate(ts) {
+    try {
+      return new Intl.DateTimeFormat(undefined,{
+        dateStyle:'medium',
+        timeStyle:'short'
+      }).format(new Date(ts));
+    } catch (_) {
+      return new Date(ts).toLocaleString();
+    }
+  }
+
+  function renderScanCacheMeta() {
+    const meta=el('scanCacheMeta');
+    const btn=el('betaScanBtn');
+    if (!meta || !btn) return;
+    const cache=getScanCache();
+    if (!cache) {
+      meta.textContent='No saved scan yet.';
+      btn.textContent='Scan my HyperEVM tokens';
+      return;
+    }
+    meta.textContent='Last scan: '+formatScanDate(cache.scannedAt)+' · '+cache.tokens.length+' token'+(cache.tokens.length===1?'':'s')+' saved locally.';
+    btn.textContent='Scan again';
+  }
+
+  function renderCachedScan() {
+    renderScanCacheMeta();
+    const cache=getScanCache();
+    if (!cache) return false;
+
+    const select=el('betaTokenSelect');
+    select.innerHTML='';
+    const first=document.createElement('option');
+    first.value='';
+    first.textContent=cache.tokens.length ? 'Pick a saved token…' : 'No token found in last scan';
+    select.appendChild(first);
+
+    for (const item of cache.tokens) {
+      if (!item?.addr || !ethers.isAddress(item.addr)) continue;
+      const opt=document.createElement('option');
+      opt.value=ethers.getAddress(item.addr);
+      opt.textContent=(item.symbol || 'TOKEN')+' · '+short(item.addr);
+      select.appendChild(opt);
+    }
+
+    el('betaScanResults').hidden=false;
+    el('betaUseBtn').disabled=true;
+    el('betaScanStats').textContent=cache.tokens.length
+      ? 'Loaded '+cache.tokens.length+' token'+(cache.tokens.length===1?'':'s')+' from this browser. Pick one now, or scan again to refresh the list.'
+      : 'Last scan found no token. Run it again whenever you want to refresh.';
+    debugLog('scan cache loaded',{tokens:cache.tokens.length,scannedAt:cache.scannedAt});
+    return true;
+  }
+
   let rpcReadId=10000;
   async function rpcEthCall(rpc,to,data,label='eth_call') {
     const controller=new AbortController();
@@ -529,6 +619,7 @@
       el('betaScanBtn').disabled=false;
       el('prepareReturnBtn').disabled=false;
       renderBridgeHistory();
+      renderCachedScan();
       debugLog('wallet connected',{wallet:short(account),chain:'HyperEVM 998',ua:navigator.userAgent});
       setStep(2);
       setStatus('Wallet connected. Nice. Pick a token.','ok');
@@ -689,6 +780,7 @@
         select.appendChild(none);
         el('betaUseBtn').disabled=true;
       }
+      saveScanCache(held);
       hideScanLive();
       debugLog('scan done',{found:held.length});
 
@@ -699,7 +791,8 @@
       hideScanLive();
       debugLog('scan error',parseErr(e));
       console.error('[Elysium Bridge Lite] Token scan error:',e);
-      el('betaScanStats').textContent='Scan hit a snag: '+parseErr(e);
+      const restored=renderCachedScan();
+      if (!restored) el('betaScanStats').textContent='Scan hit a snag: '+parseErr(e);
     } finally {
       hideScanLive();
       el('betaScanBtn').disabled=false;
