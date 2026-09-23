@@ -34,7 +34,6 @@
     .step { text-align:center; padding:8px 4px; border:1px solid var(--line); border-radius:8px; color:var(--muted); font-size:11px; }
     .step.active { border-color:var(--accent); color:var(--text); }
     .step.done { border-color:var(--ok); color:var(--ok); }
-    .tokenList { margin-top:10px; }
     footer { margin-top:22px; padding:16px 4px 8px; color:var(--muted); font-size:13px; border-top:1px solid var(--line); }
     footer strong { color:var(--text); }
     footer a { color:var(--accent); }
@@ -83,16 +82,9 @@
 
   <section class="card">
     <b>HyperEVM token</b>
-    <button id="scanBtn" class="secondary wide" disabled>Scan wallet for linked ERC-20s</button>
-    <div id="tokenListWrap" class="tokenList" hidden>
-      <label for="tokenSelect">Tokens found</label>
-      <select id="tokenSelect"></select>
-      <div id="scanHint" class="small" style="margin-top:5px"></div>
-    </div>
-
     <div class="status" style="margin-top:12px">
-      <strong>Token not listed?</strong>
-      <div class="small" style="margin-top:4px">Open your connected wallet in the HyperEVM Explorer, find the token you want to bridge, copy its <b>ERC-20 contract address</b>, then paste it below.</div>
+      <strong>Choose your token</strong>
+      <div class="small" style="margin-top:4px">Open your connected wallet in the HyperEVM Explorer, choose the token you want to bridge, copy its <b>ERC-20 contract address</b>, then paste it below.</div>
       <a id="walletExplorerTokenLink" class="btnLink secondary wide" href="#" target="_blank" rel="noopener noreferrer" hidden>Open my wallet in HyperEVM Explorer ↗</a>
     </div>
 
@@ -130,6 +122,7 @@
         <p>You approve only the exact amount being bridged. The Standard Gateway escrows the original ERC-20 on HyperEVM and a cross-chain retryable message delivers a 1:1 representation on Elysium.</p>
         <p>On the first bridge, the Elysium representation can be deployed automatically at its deterministic address. Later deposits mint against the same representation. Delivery fees are paid in native testnet HYPE.</p>
         <p>If automatic delivery fails, the original deposit should not be sent again: the existing retryable can be retried before it expires.</p>
+        <p><a href="https://elysium.kinetiq.xyz/testnet-bridge" target="_blank" rel="noopener noreferrer">Open the official Elysium Testnet Bridge to check pending deposits or retry a failed delivery ↗</a></p>
         <p><a href="https://elysium.kinetiq.xyz/docs/bridging-hyperevm-tokens-to-elysium" target="_blank" rel="noopener noreferrer">Read the official Elysium bridge documentation ↗</a></p>
       </div>
     </details>
@@ -161,7 +154,6 @@
     rpc:'https://testnet-rpc.elysium.kinetiq.xyz',
     explorer:'https://elysium.kinetiq.xyz/testnet-explorer'
   };
-  const HYPER_API = 'https://api.hyperliquid-testnet.xyz/info';
   const ROUTER = '0x1aAE2caD8B0249905492087EF230FcCEa3707C45';
   const STANDARD_GATEWAY = '0x792487eF5E423104bec94e8c58E814e5E0450cEA';
   const MAX_SUBMISSION = 400000000000000n;
@@ -237,75 +229,9 @@
       await window.ethereum.request({method:'eth_requestAccounts'});
       await switchHyperEVM();
       el('inspectBtn').disabled=false;
-      el('scanBtn').disabled=false;
       setStep(2);
       setStatus('Wallet connected.','ok');
     } catch(e) { setStatus(parseErr(e),'bad'); }
-  }
-
-  async function scanWallet() {
-    try {
-      await switchHyperEVM();
-      setStatus('Scanning HyperCore-linked ERC-20 contracts…','amber');
-      el('scanBtn').disabled=true;
-
-      const response = await fetch(HYPER_API,{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({type:'spotMeta'})
-      });
-      if (!response.ok) throw new Error('Hyperliquid token metadata request failed.');
-      const meta = await response.json();
-      const seen = new Set();
-      const candidates = (meta.tokens || []).filter(t => {
-        if (!t?.evmContract || !ethers.isAddress(t.evmContract)) return false;
-        const k=t.evmContract.toLowerCase();
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      });
-
-      const held = [];
-      const workers = Math.min(6, Math.max(1,candidates.length));
-      let cursor=0;
-      async function worker() {
-        while (cursor < candidates.length) {
-          const item=candidates[cursor++];
-          try {
-            const addr=ethers.getAddress(item.evmContract);
-            const c=new ethers.Contract(addr,ERC20_ABI,l1ReadProvider);
-            const [bal,dec,sym] = await Promise.all([
-              c.balanceOf(account),
-              c.decimals(),
-              c.symbol().catch(()=>item.name || 'TOKEN')
-            ]);
-            if (bal > 0n) held.push({addr,balance:bal,decimals:Number(dec),symbol:sym || item.name || 'TOKEN'});
-          } catch (_) {}
-        }
-      }
-      await Promise.all(Array.from({length:workers},worker));
-      held.sort((a,b)=>a.symbol.localeCompare(b.symbol));
-
-      const select=el('tokenSelect');
-      select.innerHTML='';
-      const placeholder=document.createElement('option');
-      placeholder.value='';
-      placeholder.textContent=held.length ? 'Select a token…' : 'No linked ERC-20 balance found';
-      select.appendChild(placeholder);
-      for (const h of held) {
-        const opt=document.createElement('option');
-        opt.value=h.addr;
-        opt.textContent=h.symbol+' · '+ethers.formatUnits(h.balance,h.decimals)+' · '+short(h.addr);
-        select.appendChild(opt);
-      }
-      el('tokenListWrap').hidden=false;
-      el('scanHint').textContent='Best-effort scan of HyperCore tokens that expose a HyperEVM ERC-20 contract. Native HYPE and arbitrary unlinked ERC-20s are not included.';
-      setStatus(held.length ? held.length+' token'+(held.length===1?'':'s')+' found.' : 'No linked token balance found. Open your wallet in the HyperEVM Explorer, copy the ERC-20 contract address of the token you want, and paste it below.',held.length?'ok':'amber');
-    } catch(e) {
-      setStatus('Token scan failed: '+parseErr(e)+' You can still paste an ERC-20 address manually.','bad');
-    } finally {
-      el('scanBtn').disabled=false;
-    }
   }
 
   async function inspectToken() {
@@ -387,16 +313,9 @@
   el('addHyperBtn').addEventListener('click',async()=>{ try { await addChain(HYPEREVM); setStatus('HyperEVM Testnet added to wallet.','ok'); } catch(e) { setStatus(parseErr(e),'bad'); } });
   el('addElysiumBtn').addEventListener('click',async()=>{ try { await addChain(ELYSIUM); setStatus('Elysium Testnet added to wallet.','ok'); } catch(e) { setStatus(parseErr(e),'bad'); } });
   el('connectBtn').addEventListener('click',connect);
-  el('scanBtn').addEventListener('click',scanWallet);
   el('inspectBtn').addEventListener('click',inspectToken);
   el('approveBtn').addEventListener('click',approve);
   el('bridgeBtn').addEventListener('click',bridge);
-  el('tokenSelect').addEventListener('change',async e => {
-    if (!e.target.value) return;
-    el('token').value=e.target.value;
-    await inspectToken();
-  });
-
   if (!window.ethereum) setStatus('No injected wallet detected. On mobile, open this page inside Rabby/MetaMask dApp browser.','amber');
 })();
 </script>
