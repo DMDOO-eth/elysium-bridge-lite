@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0f14" />
+  <title>Elysium Bridge Lite</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0f14; --panel:#121923; --line:#233044; --text:#eef4ff; --muted:#8fa2ba; --accent:#78aaff; --ok:#50d890; --warn:#ffc857; --bad:#ff6b6b; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(620px,100%); margin:0 auto; padding:18px 14px 42px; }
+    h1 { margin:4px 0 2px; font-size:25px; }
+    .sub { color:var(--muted); margin-bottom:18px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; margin:12px 0; }
+    .row { display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+    label { display:block; color:var(--muted); font-size:12px; margin:10px 0 5px; }
+    input { width:100%; border:1px solid var(--line); border-radius:10px; padding:12px; background:#0d131c; color:var(--text); font-size:16px; outline:none; }
+    input:focus { border-color:var(--accent); }
+    button { appearance:none; border:0; border-radius:10px; padding:12px 14px; font-weight:700; font-size:15px; background:var(--accent); color:#06111f; min-height:44px; cursor:pointer; }
+    button.secondary { background:#1e2a3a; color:var(--text); }
+    button.good { background:var(--ok); color:#04120a; }
+    button.warn { background:var(--warn); color:#1b1200; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .wide { width:100%; margin-top:10px; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all; }
+    .small { font-size:12px; color:var(--muted); }
+    .kv { display:grid; grid-template-columns:125px 1fr; gap:7px 10px; margin-top:8px; }
+    .kv div:nth-child(odd) { color:var(--muted); }
+    .status { padding:10px 12px; border-radius:10px; background:#0d131c; border:1px solid var(--line); margin-top:10px; }
+    .ok { color:var(--ok); } .bad { color:var(--bad); } .amber { color:var(--warn); }
+    .steps { display:grid; grid-template-columns:repeat(4,1fr); gap:5px; margin:12px 0 16px; }
+    .step { text-align:center; padding:8px 4px; border:1px solid var(--line); border-radius:8px; color:var(--muted); font-size:11px; }
+    .step.active { border-color:var(--accent); color:var(--text); }
+    .step.done { border-color:var(--ok); color:var(--ok); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Elysium Bridge Lite</h1>
+  <div class="sub">HyperEVM testnet → Elysium · ultra-light</div>
+
+  <div class="steps">
+    <div id="s1" class="step active">1 Connect</div>
+    <div id="s2" class="step">2 Token</div>
+    <div id="s3" class="step">3 Approve</div>
+    <div id="s4" class="step">4 Bridge</div>
+  </div>
+
+  <section class="card">
+    <div class="row">
+      <div><b>Wallet</b><div id="walletText" class="small">Non connecté</div></div>
+      <button id="connectBtn">Connecter</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <b>Token HyperEVM</b>
+    <label for="token">Adresse ERC-20</label>
+    <input id="token" class="mono" value="0x923a9c790beed09868c9469c863476331d529478" autocomplete="off" autocapitalize="off" spellcheck="false" />
+    <button id="inspectBtn" class="secondary wide" disabled>Lire le token</button>
+    <div id="tokenInfo" hidden>
+      <div class="kv">
+        <div>Token</div><div id="meta"></div>
+        <div>Balance</div><div id="balance"></div>
+        <div>Gateway</div><div id="gateway" class="mono"></div>
+        <div>Rep Elysium</div><div id="rep" class="mono"></div>
+        <div>État</div><div id="repState"></div>
+      </div>
+      <label for="amount">Montant</label>
+      <input id="amount" inputmode="decimal" placeholder="1" value="1" />
+    </div>
+  </section>
+
+  <section class="card">
+    <b>Transactions</b>
+    <button id="approveBtn" class="wide" disabled>1 · Approve exact</button>
+    <button id="bridgeBtn" class="good wide" disabled>2 · Bridge vers Elysium</button>
+    <div id="feeText" class="small" style="margin-top:8px"></div>
+    <div id="status" class="status">Prêt.</div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.min.js"></script>
+<script>
+(() => {
+  const HYPEREVM = { hex:'0x3e6', name:'Hyperliquid EVM Testnet', rpc:'https://rpc.hyperliquid-testnet.xyz/evm', explorer:'https://app.hyperliquid-testnet.xyz/explorer' };
+  const ELYSIUM = { rpc:'https://testnet-rpc.elysium.kinetiq.xyz' };
+  const ROUTER = '0x1aAE2caD8B0249905492087EF230FcCEa3707C45';
+  const STANDARD_GATEWAY = '0x792487eF5E423104bec94e8c58E814e5E0450cEA';
+  const MAX_SUBMISSION = 400000000000000n;
+  const GAS_PRICE_BID = 100000000n;
+  const ERC20_ABI = [
+    'function name() view returns (string)',
+    'function symbol() view returns (string)',
+    'function decimals() view returns (uint8)',
+    'function balanceOf(address) view returns (uint256)',
+    'function allowance(address,address) view returns (uint256)',
+    'function approve(address,uint256) returns (bool)'
+  ];
+  const ROUTER_ABI = [
+    'function getGateway(address token) view returns (address)',
+    'function calculateL2TokenAddress(address token) view returns (address)',
+    'function outboundTransfer(address token,address to,uint256 amount,uint256 maxGas,uint256 gasPriceBid,bytes data) payable returns (bytes)'
+  ];
+
+  const el = id => document.getElementById(id);
+  let browserProvider, signer, account, token, tokenAddress, tokenSymbol, tokenDecimals, tokenBalance, gateway, repAddress;
+  let maxGas = 600000n;
+  const l2Provider = new ethers.JsonRpcProvider(ELYSIUM.rpc);
+
+  function short(a) { return a ? a.slice(0,6) + '…' + a.slice(-4) : '—'; }
+  function setStatus(msg, kind='') { el('status').className = 'status ' + kind; el('status').textContent = msg; }
+  function parseErr(e) { return e?.shortMessage || e?.reason || e?.info?.error?.message || e?.message || String(e); }
+
+  async function switchHyperEVM() {
+    if (!window.ethereum) throw new Error('Ouvre cette page dans le navigateur dApp de Rabby/MetaMask.');
+    try {
+      await window.ethereum.request({ method:'wallet_switchEthereumChain', params:[{chainId:HYPEREVM.hex}] });
+    } catch (e) {
+      if (e.code !== 4902) throw e;
+      await window.ethereum.request({ method:'wallet_addEthereumChain', params:[{
+        chainId:HYPEREVM.hex, chainName:HYPEREVM.name,
+        nativeCurrency:{name:'HYPE',symbol:'HYPE',decimals:18},
+        rpcUrls:[HYPEREVM.rpc], blockExplorerUrls:[HYPEREVM.explorer]
+      }] });
+    }
+    browserProvider = new ethers.BrowserProvider(window.ethereum);
+    signer = await browserProvider.getSigner();
+    account = await signer.getAddress();
+    el('walletText').textContent = short(account) + ' · HyperEVM testnet';
+  }
+
+  async function connect() {
+    try {
+      await window.ethereum.request({method:'eth_requestAccounts'});
+      await switchHyperEVM();
+      el('inspectBtn').disabled = false;
+      setStatus('Wallet connecté.','ok');
+    } catch(e) { setStatus(parseErr(e),'bad'); }
+  }
+
+  async function inspectToken() {
+    try {
+      await switchHyperEVM();
+      tokenAddress = ethers.getAddress(el('token').value.trim());
+      token = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+      const router = new ethers.Contract(ROUTER, ROUTER_ABI, signer);
+      const [name,symbol,decimals,bal,gw,rep] = await Promise.all([
+        token.name().catch(()=>''), token.symbol(), token.decimals(), token.balanceOf(account),
+        router.getGateway(tokenAddress), router.calculateL2TokenAddress(tokenAddress)
+      ]);
+      tokenSymbol = symbol; tokenDecimals = Number(decimals); tokenBalance = bal;
+      gateway = ethers.getAddress(gw); repAddress = ethers.getAddress(rep);
+      if (gateway.toLowerCase() !== STANDARD_GATEWAY.toLowerCase()) throw new Error('Gateway custom non supporté par cette V0.');
+      const code = await l2Provider.getCode(repAddress);
+      const firstDeploy = code === '0x';
+      maxGas = firstDeploy ? 600000n : 300000n;
+      el('meta').textContent = (name ? name + ' · ' : '') + symbol + ' · ' + tokenDecimals + ' dp';
+      el('balance').textContent = ethers.formatUnits(bal, tokenDecimals) + ' ' + symbol;
+      el('gateway').textContent = gateway;
+      el('rep').textContent = repAddress;
+      el('repState').textContent = firstDeploy ? 'Premier bridge' : 'Déjà déployé';
+      el('tokenInfo').hidden = false;
+      el('approveBtn').disabled = false;
+      const fee = MAX_SUBMISSION + maxGas * GAS_PRICE_BID;
+      el('feeText').textContent = 'Fee provisionnée: ' + ethers.formatEther(fee) + ' HYPE · maxGas ' + maxGas;
+      setStatus('Token lu.','ok');
+    } catch(e) { setStatus(parseErr(e),'bad'); }
+  }
+
+  function amountUnits() {
+    const v = el('amount').value.trim();
+    const units = ethers.parseUnits(v, tokenDecimals);
+    if (units <= 0n) throw new Error('Montant invalide.');
+    if (units > tokenBalance) throw new Error('Balance insuffisante.');
+    return units;
+  }
+
+  async function approve() {
+    try {
+      await switchHyperEVM();
+      const units = amountUnits();
+      const allowance = await token.allowance(account,gateway);
+      if (allowance < units) {
+        setStatus('Approve…','amber');
+        const tx = await token.approve(gateway,units);
+        await tx.wait();
+      }
+      el('bridgeBtn').disabled = false;
+      setStatus('Approve OK.','ok');
+    } catch(e) { setStatus(parseErr(e),'bad'); }
+  }
+
+  async function bridge() {
+    try {
+      await switchHyperEVM();
+      const units = amountUnits();
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256','bytes'],[MAX_SUBMISSION,'0x']);
+      const fee = MAX_SUBMISSION + maxGas * GAS_PRICE_BID;
+      const router = new ethers.Contract(ROUTER,ROUTER_ABI,signer);
+      setStatus('Signature du bridge…','amber');
+      const tx = await router.outboundTransfer(tokenAddress,account,units,maxGas,GAS_PRICE_BID,data,{value:fee});
+      setStatus('Envoyé: ' + tx.hash,'amber');
+      await tx.wait();
+      setStatus('Bridge HyperEVM confirmé. Vérifie Elysium.','ok');
+      el('bridgeBtn').disabled = true;
+    } catch(e) { setStatus(parseErr(e),'bad'); }
+  }
+
+  el('connectBtn').addEventListener('click',connect);
+  el('inspectBtn').addEventListener('click',inspectToken);
+  el('approveBtn').addEventListener('click',approve);
+  el('bridgeBtn').addEventListener('click',bridge);
+
+  if (!window.ethereum) setStatus('Sur mobile, ouvre la page dans le navigateur dApp de Rabby/MetaMask.','amber');
+})();
+</script>
+</body>
+</html>
