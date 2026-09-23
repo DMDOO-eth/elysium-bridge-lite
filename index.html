@@ -253,6 +253,7 @@
           <button id="copyDebugBtn" class="secondary">Copy log</button>
           <button id="clearDebugBtn" class="secondary">Clear</button>
         </div>
+        <div id="buildText" class="small" style="margin-top:7px"></div>
       </div>
     </details>
 
@@ -272,6 +273,7 @@
     return;
   }
 
+  const BUILD = '2026.09.24-approval-debug-1';
   const HYPEREVM = {
     chainId:'0x3e6',
     name:'Hyperliquid EVM Testnet',
@@ -1104,7 +1106,8 @@
 
   window.addEventListener('error',e=>debugLog('window error',e?.message || 'unknown'));
   window.addEventListener('unhandledrejection',e=>debugLog('unhandled rejection',parseErr(e?.reason)));
-  debugLog('page ready',{ua:navigator.userAgent});
+  el('buildText').textContent='Build: '+BUILD;
+  debugLog('page ready',{build:BUILD,ua:navigator.userAgent});
 
   if (!window.ethereum) setStatus('No wallet detected. On mobile, open this page inside Rabby or MetaMask’s dApp browser.','amber');
 })();
