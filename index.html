@@ -33,6 +33,9 @@
     .small { font-size:12px; color:var(--muted); }
     .kv { display:grid; grid-template-columns:125px 1fr; gap:7px 10px; margin-top:8px; }
     .kv div:nth-child(odd) { color:var(--muted); }
+    .balanceRow { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+    .pctButtons { display:flex; gap:5px; flex-wrap:wrap; }
+    .pctButtons button { min-height:28px; padding:4px 8px; font-size:11px; border-radius:7px; }
     .status { padding:10px 12px; border-radius:10px; background:#0d131c; border:1px solid var(--line); margin-top:10px; overflow-wrap:anywhere; }
     .ok { color:var(--ok); } .bad { color:var(--bad); } .amber { color:var(--warn); }
     .scanLive { display:flex; align-items:center; gap:9px; margin-top:10px; color:var(--muted); }
@@ -156,7 +159,15 @@
     <div id="tokenInfo" hidden>
       <div class="kv">
         <div>Token</div><div id="meta"></div>
-        <div>Balance</div><div id="balance"></div>
+        <div>Balance</div>
+        <div class="balanceRow">
+          <span id="balance"></span>
+          <span class="pctButtons" aria-label="Quick amount">
+            <button type="button" class="secondary" data-pct="25">25%</button>
+            <button type="button" class="secondary" data-pct="50">50%</button>
+            <button type="button" class="secondary" data-pct="100">100%</button>
+          </span>
+        </div>
         <div>Gateway</div><div id="gateway" class="mono"></div>
         <div>Elysium token</div><div id="rep" class="mono"></div>
         <div>Status</div><div id="repState"></div>
@@ -296,6 +307,17 @@
   let maxGas = 600000n;
 
   function short(a) { return a ? a.slice(0,6)+'…'+a.slice(-4) : '—'; }
+
+  function unitsToInput(units,decimals) {
+    return ethers.formatUnits(units,decimals);
+  }
+
+  function percentOfBalance(pct) {
+    if (tokenBalance == null || tokenDecimals == null) return;
+    const units=(tokenBalance*BigInt(pct))/100n;
+    el('amount').value=unitsToInput(units,tokenDecimals);
+    el('amount').dispatchEvent(new Event('input',{bubbles:true}));
+  }
   function setStatus(msg, kind='') { el('status').className='status '+kind; el('status').textContent=msg; }
   function parseErr(e) { return e?.shortMessage || e?.reason || e?.info?.error?.message || e?.message || String(e); }
 
@@ -936,6 +958,10 @@
       setUseTokenBusy(false);
     }
   });
+  document.querySelectorAll('[data-pct]').forEach(btn=>{
+    btn.addEventListener('click',()=>percentOfBalance(Number(btn.dataset.pct)));
+  });
+
   el('inspectBtn').addEventListener('click',inspectToken);
   el('returnHistorySelect').addEventListener('change',e=>{ el('useReturnHistoryBtn').disabled=!e.target.value; });
   el('useReturnHistoryBtn').addEventListener('click',async()=>{
