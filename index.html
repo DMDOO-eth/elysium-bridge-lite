@@ -74,19 +74,39 @@
       <div style="min-width:0">
         <b>Wallet</b>
         <div id="walletText" class="small">Not connected</div>
-        <a id="walletExplorerLink" class="small" href="#" target="_blank" rel="noopener noreferrer" hidden>Open connected wallet in HyperEVM Explorer ↗</a>
       </div>
       <button id="connectBtn">Connect wallet</button>
+    </div>
+    <a class="btnLink secondary wide" href="https://app.hyperliquid-testnet.xyz/portfolio" target="_blank" rel="noopener noreferrer">Open Hyperliquid Testnet Portfolio ↗</a>
     </div>
   </section>
 
   <section class="card">
     <b>HyperEVM token</b>
     <div class="status" style="margin-top:12px">
-      <strong>Choose your token</strong>
-      <div class="small" style="margin-top:4px">Open your connected wallet in the HyperEVM Explorer, choose the token you want to bridge, copy its <b>ERC-20 contract address</b>, then paste it below.</div>
-      <a id="walletExplorerTokenLink" class="btnLink secondary wide" href="#" target="_blank" rel="noopener noreferrer" hidden>Open my wallet in HyperEVM Explorer ↗</a>
+      <strong>Get the token's EVM address</strong>
+      <div class="small" style="margin-top:6px">
+        1. Open your <b>Hyperliquid Testnet Portfolio</b>.<br>
+        2. If the token is still on HyperCore, use <b>Transfer to/from EVM</b> to move the amount you want to bridge to HyperEVM first.<br>
+        3. In <b>Balances</b>, click the small external-link icon next to the token in the <b>Contract</b> column.<br>
+        4. In the token details page, copy the <b>EVM Address</b> and paste it below.
+      </div>
+      <a class="btnLink secondary wide" href="https://app.hyperliquid-testnet.xyz/portfolio" target="_blank" rel="noopener noreferrer">Open Hyperliquid Testnet Portfolio ↗</a>
     </div>
+
+    <details id="betaScanBox">
+      <summary>Beta · Scan HyperEVM token balances</summary>
+      <div class="detailsBody">
+        <p class="small">Experimental diagnostic. It reads Hyperliquid testnet spot metadata, extracts linked HyperEVM contracts, then checks your connected wallet's ERC-20 balances. Nothing is signed.</p>
+        <button id="betaScanBtn" class="secondary wide" disabled>Run beta scan</button>
+        <div id="betaScanStats" class="small" style="margin-top:8px">Connect your wallet first.</div>
+        <div id="betaScanResults" hidden>
+          <label for="betaTokenSelect">Tokens found on HyperEVM</label>
+          <select id="betaTokenSelect"></select>
+          <button id="betaUseBtn" class="secondary wide" disabled>Use selected token</button>
+        </div>
+      </div>
+    </details>
 
     <label for="token">ERC-20 contract address</label>
     <input id="token" class="mono" placeholder="0x…" autocomplete="off" autocapitalize="off" spellcheck="false" />
@@ -154,6 +174,7 @@
     rpc:'https://testnet-rpc.elysium.kinetiq.xyz',
     explorer:'https://elysium.kinetiq.xyz/testnet-explorer'
   };
+  const HYPER_API = 'https://api.hyperliquid-testnet.xyz/info';
   const ROUTER = '0x1aAE2caD8B0249905492087EF230FcCEa3707C45';
   const STANDARD_GATEWAY = '0x792487eF5E423104bec94e8c58E814e5E0450cEA';
   const MAX_SUBMISSION = 400000000000000n;
@@ -217,11 +238,6 @@
     signer = await browserProvider.getSigner();
     account = await signer.getAddress();
     el('walletText').textContent=short(account)+' · HyperEVM Testnet';
-    const walletUrl=HYPEREVM.explorer+'/address/'+account;
-    el('walletExplorerLink').href=walletUrl;
-    el('walletExplorerLink').hidden=false;
-    el('walletExplorerTokenLink').href=walletUrl;
-    el('walletExplorerTokenLink').hidden=false;
   }
 
   async function connect() {
@@ -229,9 +245,90 @@
       await window.ethereum.request({method:'eth_requestAccounts'});
       await switchHyperEVM();
       el('inspectBtn').disabled=false;
+      el('betaScanBtn').disabled=false;
       setStep(2);
       setStatus('Wallet connected.','ok');
     } catch(e) { setStatus(parseErr(e),'bad'); }
+  }
+
+  async function betaScan() {
+    try {
+      await switchHyperEVM();
+      el('betaScanBtn').disabled=true;
+      el('betaScanStats').textContent='Loading Hyperliquid spot metadata…';
+
+      const response=await fetch(HYPER_API,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({type:'spotMeta'})
+      });
+      if (!response.ok) throw new Error('Hyperliquid API returned HTTP '+response.status+'.');
+      const meta=await response.json();
+      const allTokens=Array.isArray(meta?.tokens) ? meta.tokens : [];
+
+      const seen=new Set();
+      const linked=[];
+      for (const t of allTokens) {
+        const raw = typeof t?.evmContract === 'string'
+          ? t.evmContract
+          : t?.evmContract?.address;
+        if (!raw || !ethers.isAddress(raw)) continue;
+        const addr=ethers.getAddress(raw);
+        const key=addr.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        linked.push({addr,name:t.name || 'TOKEN',tokenId:t.tokenId || ''});
+      }
+
+      el('betaScanStats').textContent =
+        'Metadata: '+allTokens.length+' spot tokens · '+linked.length+' linked HyperEVM contracts · checking balances…';
+
+      const held=[];
+      let cursor=0;
+      const workers=Math.min(8,Math.max(1,linked.length));
+      async function worker() {
+        while (cursor<linked.length) {
+          const item=linked[cursor++];
+          try {
+            const contract=new ethers.Contract(item.addr,ERC20_ABI,l1ReadProvider);
+            const [bal,dec,sym]=await Promise.all([
+              contract.balanceOf(account),
+              contract.decimals(),
+              contract.symbol().catch(()=>item.name)
+            ]);
+            if (bal>0n) held.push({
+              ...item,
+              balance:bal,
+              decimals:Number(dec),
+              symbol:sym || item.name
+            });
+          } catch (_) {}
+        }
+      }
+      await Promise.all(Array.from({length:workers},worker));
+      held.sort((a,b)=>a.symbol.localeCompare(b.symbol));
+
+      const select=el('betaTokenSelect');
+      select.innerHTML='';
+      const first=document.createElement('option');
+      first.value='';
+      first.textContent=held.length ? 'Select a token…' : 'No positive ERC-20 balance found';
+      select.appendChild(first);
+      for (const h of held) {
+        const opt=document.createElement('option');
+        opt.value=h.addr;
+        opt.textContent=h.symbol+' · '+ethers.formatUnits(h.balance,h.decimals)+' · '+short(h.addr);
+        select.appendChild(opt);
+      }
+      el('betaScanResults').hidden=false;
+      el('betaUseBtn').disabled=true;
+      el('betaScanStats').textContent =
+        'Metadata: '+allTokens.length+' spot tokens · '+linked.length+' linked HyperEVM contracts · '+held.length+' positive wallet balance'+(held.length===1?'':'s')+'.';
+    } catch(e) {
+      el('betaScanStats').textContent='Beta scan error: '+parseErr(e);
+    } finally {
+      el('betaScanBtn').disabled=false;
+    }
   }
 
   async function inspectToken() {
@@ -313,6 +410,14 @@
   el('addHyperBtn').addEventListener('click',async()=>{ try { await addChain(HYPEREVM); setStatus('HyperEVM Testnet added to wallet.','ok'); } catch(e) { setStatus(parseErr(e),'bad'); } });
   el('addElysiumBtn').addEventListener('click',async()=>{ try { await addChain(ELYSIUM); setStatus('Elysium Testnet added to wallet.','ok'); } catch(e) { setStatus(parseErr(e),'bad'); } });
   el('connectBtn').addEventListener('click',connect);
+  el('betaScanBtn').addEventListener('click',betaScan);
+  el('betaTokenSelect').addEventListener('change',e=>{ el('betaUseBtn').disabled=!e.target.value; });
+  el('betaUseBtn').addEventListener('click',async()=>{
+    const addr=el('betaTokenSelect').value;
+    if (!addr) return;
+    el('token').value=addr;
+    await inspectToken();
+  });
   el('inspectBtn').addEventListener('click',inspectToken);
   el('approveBtn').addEventListener('click',approve);
   el('bridgeBtn').addEventListener('click',bridge);
