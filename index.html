@@ -888,9 +888,11 @@
 
   async function approve() {
     try {
+      debugLog('approve start',{token:tokenAddress,gateway,amount:el('amount').value});
       await switchHyperEVM();
       const units=amountUnits();
       const ercIface=new ethers.Interface(ERC20_ABI);
+
       const allowanceResult=await readContract(
         HYPEREVM.rpc,
         tokenAddress,
@@ -900,10 +902,18 @@
         'token allowance'
       );
       const allowance=allowanceResult[0];
+      debugLog('allowance checked',{allowance:allowance.toString(),needed:units.toString()});
 
       if (allowance<units) {
         setStatus('Approval time — check your wallet.','amber');
-        const tx=await token.approve(gateway,units);
+
+        // Re-bind the token to the signer created by the latest mobile wallet/network switch.
+        // Rabby iOS can reject a transaction if a Contract still holds an older BrowserProvider signer.
+        const liveToken=new ethers.Contract(tokenAddress,ERC20_ABI,signer);
+        debugLog('approval request',{token:tokenAddress,spender:gateway,units:units.toString()});
+        const tx=await liveToken.approve(gateway,units);
+        debugLog('approval submitted',{hash:tx.hash});
+
         setStatus('Approval sent. Waiting for confirmation: '+tx.hash,'amber');
         await tx.wait();
       }
@@ -912,7 +922,13 @@
       setStep(4);
       setStatus('Approval confirmed. One more click.','ok');
     } catch(e) {
-      debugLog('approve error',parseErr(e));
+      debugLog('approve error',{
+        message:parseErr(e),
+        code:e?.code ?? null,
+        action:e?.action ?? null,
+        method:e?.payload?.method ?? null,
+        rpcMessage:e?.info?.error?.message ?? e?.error?.message ?? null
+      });
       setStatus(parseErr(e),'bad');
     }
   }
