@@ -34,7 +34,7 @@
     .kv { display:grid; grid-template-columns:125px 1fr; gap:7px 10px; margin-top:8px; }
     .kv div:nth-child(odd) { color:var(--muted); }
     .balanceRow { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; min-width:0; }
-    .balanceRow #balance { min-width:0; overflow-wrap:anywhere; }
+    .balanceRow #balance, .balanceRow #returnBalance { min-width:0; overflow-wrap:anywhere; }
     .pctButtons { display:flex; gap:5px; flex-wrap:wrap; flex:0 0 auto; }
     .pctButtons button { min-height:28px; padding:4px 8px; font-size:11px; border-radius:7px; }
     .status { padding:10px 12px; border-radius:10px; background:#0d131c; border:1px solid var(--line); margin-top:10px; overflow-wrap:anywhere; }
@@ -68,7 +68,7 @@
       .networkGrid button, .networkGrid .btnLink { min-height:36px; padding:7px 6px; font-size:12px; border-radius:8px; }
       .kv { grid-template-columns:92px minmax(0,1fr); }
       .balanceRow { display:block; min-width:0; }
-      .balanceRow #balance { display:block; overflow-wrap:anywhere; }
+      .balanceRow #balance, .balanceRow #returnBalance { display:block; overflow-wrap:anywhere; }
       .pctButtons { margin-top:6px; display:flex; gap:5px; }
       .pctButtons button { min-width:45px; min-height:30px; padding:4px 7px; }
       .hero { min-height:190px; }
@@ -197,7 +197,7 @@
     <details id="returnTripBox">
       <summary>Return trip · Elysium → HyperEVM</summary>
       <div class="detailsBody">
-        <p class="small">Got a bridged token on Elysium? Pick one we've already bridged in this browser, or paste <b>either</b> the original HyperEVM address <b>or</b> the Elysium representation address. We'll sort out which one you gave us.</p>
+        <p class="small">Got a bridged token on Elysium? Pick one we've already bridged in this browser, or paste <b>either</b> the original HyperEVM address <b>or</b> the Elysium representation address. We'll sort out which one you gave us. <b>Fresh bridge?</b> Elysium delivery usually takes about a minute after the HyperEVM transaction confirms.</p>
 
         <div id="returnHistoryWrap" hidden>
           <label for="returnHistorySelect">Previously bridged with this browser</label>
@@ -214,7 +214,15 @@
           <div class="kv">
             <div>HyperEVM original</div><div id="returnOriginal" class="mono"></div>
             <div>Elysium rep</div><div id="returnRep" class="mono"></div>
-            <div>Balance</div><div id="returnBalance"></div>
+            <div>Balance</div>
+            <div class="balanceRow">
+              <span id="returnBalance"></span>
+              <span class="pctButtons" aria-label="Quick return amount">
+                <button type="button" class="secondary" data-return-pct="25">25%</button>
+                <button type="button" class="secondary" data-return-pct="50">50%</button>
+                <button type="button" class="secondary" data-return-pct="100">100%</button>
+              </span>
+            </div>
           </div>
           <label for="returnAmount">How much are we bringing back?</label>
           <input id="returnAmount" inputmode="decimal" placeholder="1" />
@@ -273,7 +281,7 @@
     return;
   }
 
-  const BUILD = '2026.09.24-mobile-tx-2';
+  const BUILD = '2026.09.24-return-ux-1';
   const HYPEREVM = {
     chainId:'0x3e6',
     name:'Hyperliquid EVM Testnet',
@@ -327,6 +335,13 @@
     const units=(tokenBalance*BigInt(pct))/100n;
     el('amount').value=unitsToInput(units,tokenDecimals);
     el('amount').dispatchEvent(new Event('input',{bubbles:true}));
+  }
+
+  function percentOfReturnBalance(pct) {
+    if (returnBalance == null || returnDecimals == null) return;
+    const units=(returnBalance*BigInt(pct))/100n;
+    el('returnAmount').value=unitsToInput(units,returnDecimals);
+    el('returnAmount').dispatchEvent(new Event('input',{bubbles:true}));
   }
   function setStatus(msg, kind='') { el('status').className='status '+kind; el('status').textContent=msg; }
   function parseErr(e) { return e?.shortMessage || e?.reason || e?.info?.error?.message || e?.message || String(e); }
@@ -1010,6 +1025,20 @@
         returnRep=ethers.getAddress(await router.calculateL2TokenAddress(returnOriginal));
       }
 
+      el('returnOriginal').textContent=returnOriginal;
+      el('returnRep').textContent=returnRep;
+
+      const repCode=await getElysiumCode(returnRep);
+      if (repCode==='0x') {
+        el('returnInfo').hidden=true;
+        el('returnBtn').disabled=true;
+        setReturnStatus(
+          'Token not available on Elysium yet. A fresh bridge usually takes about a minute after HyperEVM confirmation. Try again shortly.',
+          'amber'
+        );
+        return;
+      }
+
       const repToken=new ethers.Contract(returnRep,ERC20_ABI,signer);
       const [sym,dec,bal]=await Promise.all([
         repToken.symbol(),
@@ -1034,7 +1063,15 @@
         bal>0n ? 'ok' : 'amber'
       );
     } catch(e) {
-      setReturnStatus(parseErr(e),'bad');
+      const msg=parseErr(e);
+      if (/could not decode result data|missing revert data/i.test(msg)) {
+        setReturnStatus(
+          'Token is not ready on Elysium yet. If you just bridged it, wait about a minute and try again.',
+          'amber'
+        );
+      } else {
+        setReturnStatus(msg,'bad');
+      }
     }
   }
 
@@ -1176,7 +1213,7 @@
       });
       setStep(4);
       el('s4').className='step done';
-      setStatus('HyperEVM side confirmed. Elysium delivery is on the way.','ok');
+      setStatus('HyperEVM side confirmed. Elysium delivery is on the way — it usually takes about a minute.','ok');
       el('bridgeBtn').disabled=true;
     } catch(e) { setStatus(parseErr(e),'bad'); }
   }
@@ -1201,6 +1238,9 @@
   });
   document.querySelectorAll('[data-pct]').forEach(btn=>{
     btn.addEventListener('click',()=>percentOfBalance(Number(btn.dataset.pct)));
+  });
+  document.querySelectorAll('[data-return-pct]').forEach(btn=>{
+    btn.addEventListener('click',()=>percentOfReturnBalance(Number(btn.dataset.returnPct)));
   });
 
   el('inspectBtn').addEventListener('click',inspectToken);
