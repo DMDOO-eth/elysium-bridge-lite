@@ -38,6 +38,7 @@
     .scanLive { display:flex; align-items:center; gap:9px; margin-top:10px; color:var(--muted); }
     .scanLive[hidden] { display:none !important; }
     .spinner { width:17px; height:17px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; flex:0 0 auto; }
+    .btnSpinner { width:14px; height:14px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin .8s linear infinite; margin-right:7px; flex:0 0 auto; }
     @keyframes spin { to { transform:rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .spinner { animation:none; border-top-color:var(--ok); } }
     .steps { display:grid; grid-template-columns:repeat(4,1fr); gap:5px; margin:12px 0 16px; }
@@ -291,6 +292,7 @@
   const el = id => document.getElementById(id);
   let browserProvider, signer, account, token, tokenAddress, tokenSymbol, tokenDecimals, tokenBalance, gateway, repAddress;
   let returnOriginal, returnRep, returnDecimals, returnBalance;
+  let inspectingToken=false;
   let maxGas = 600000n;
 
   function short(a) { return a ? a.slice(0,6)+'…'+a.slice(-4) : '—'; }
@@ -326,6 +328,20 @@
   }
   function hideScanLive() {
     el('scanLive').hidden=true;
+  }
+
+  function setUseTokenBusy(busy) {
+    inspectingToken=busy;
+    const btn=el('betaUseBtn');
+    const select=el('betaTokenSelect');
+    if (btn) {
+      btn.disabled=busy || !select?.value;
+      btn.innerHTML=busy
+        ? '<span class="btnSpinner" aria-hidden="true"></span>Checking bridge route…'
+        : 'Use this token';
+    }
+    if (select) select.disabled=busy;
+    if (busy) el('betaScanStats').textContent='Checking token, gateway and Elysium representation…';
   }
 
   function historyKey() {
@@ -910,10 +926,15 @@
   el('betaTokenSelect').addEventListener('change',e=>{ el('betaUseBtn').disabled=!e.target.value; });
   el('betaUseBtn').addEventListener('click',async()=>{
     const addr=el('betaTokenSelect').value;
-    if (!addr) return;
+    if (!addr || inspectingToken) return;
     el('token').value=addr;
+    setUseTokenBusy(true);
     setStatus('Good pick. Checking the bridge route…','amber');
-    await inspectToken();
+    try {
+      await inspectToken();
+    } finally {
+      setUseTokenBusy(false);
+    }
   });
   el('inspectBtn').addEventListener('click',inspectToken);
   el('returnHistorySelect').addEventListener('change',e=>{ el('useReturnHistoryBtn').disabled=!e.target.value; });
