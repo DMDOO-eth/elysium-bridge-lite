@@ -496,7 +496,14 @@
     try {
       await switchHyperEVM();
       el('betaScanBtn').disabled=true;
-      el('betaScanResults').hidden=true;
+      const select=el('betaTokenSelect');
+      select.innerHTML='';
+      const waiting=document.createElement('option');
+      waiting.value='';
+      waiting.textContent='Scanning… tokens will pop in here';
+      select.appendChild(waiting);
+      el('betaScanResults').hidden=false;
+      el('betaUseBtn').disabled=true;
       showScanLive('Scanning HyperEVM contracts… hang tight.');
       el('betaScanStats').textContent='Loading Hyperliquid token metadata…';
       debugLog('scan start',{rpc:HYPEREVM.rpc});
@@ -535,7 +542,7 @@
       const balanceData=iface.encodeFunctionData('balanceOf',[account]);
       const isMobile=window.matchMedia?.('(pointer:coarse)').matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
       const workerCount=isMobile ? 4 : 8;
-      const heldRaw=[];
+      const held=[];
       let cursor=0;
       let completed=0;
 
@@ -581,9 +588,35 @@
             const raw=await rpcCall(item.addr,balanceData,index+1,2);
             const [bal]=iface.decodeFunctionResult('balanceOf',raw);
             if (bal>0n) {
-              heldRaw.push({...item,balance:bal});
-              showScanLive('Still scanning… '+heldRaw.length+' token'+(heldRaw.length===1?'':'s')+' found so far.');
-              debugLog('positive balance',{symbol:item.name,address:item.addr,raw:bal.toString()});
+              let dec=18;
+              let sym=item.name || 'TOKEN';
+
+              try {
+                const data=iface.encodeFunctionData('decimals',[]);
+                const rawDec=await rpcCall(item.addr,data,5000+index,2);
+                const [value]=iface.decodeFunctionResult('decimals',rawDec);
+                dec=Number(value);
+              } catch (_) {}
+
+              try {
+                const data=iface.encodeFunctionData('symbol',[]);
+                const rawSym=await rpcCall(item.addr,data,6000+index,2);
+                const [value]=iface.decodeFunctionResult('symbol',rawSym);
+                sym=value || sym;
+              } catch (_) {}
+
+              const found={...item,balance:bal,decimals:dec,symbol:sym};
+              held.push(found);
+
+              // First hit replaces the "Scanning…" placeholder. Later hits simply append.
+              if (held.length===1) select.innerHTML='';
+              const opt=document.createElement('option');
+              opt.value=found.addr;
+              opt.textContent=found.symbol+' · '+ethers.formatUnits(found.balance,found.decimals)+' · '+short(found.addr);
+              select.appendChild(opt);
+
+              showScanLive('Still scanning… '+held.length+' token'+(held.length===1?'':'s')+' found so far. You can already pick one.');
+              debugLog('positive balance',{symbol:found.symbol,address:found.addr,balance:ethers.formatUnits(found.balance,found.decimals)});
             }
           } catch(e) {
             debugLog('balance check skipped',{address:item.addr,error:parseErr(e)});
@@ -591,7 +624,7 @@
 
           completed++;
           if (completed===1 || completed%40===0 || completed===linked.length) {
-            debugLog('scan progress',{checked:completed,total:linked.length,found:heldRaw.length});
+            debugLog('scan progress',{checked:completed,total:linked.length,found:held.length});
           }
         }
       }
@@ -599,47 +632,14 @@
       debugLog('RPC single-call scan',{workers:workerCount,mobile:isMobile});
       await Promise.all(Array.from({length:workerCount},(_,i)=>worker(i)));
 
-      const held=[];
-      for (let i=0;i<heldRaw.length;i++) {
-        const item=heldRaw[i];
-        let dec=18;
-        let sym=item.name || 'TOKEN';
-
-        try {
-          const data=iface.encodeFunctionData('decimals',[]);
-          const raw=await rpcCall(item.addr,data,5000+i,2);
-          const [value]=iface.decodeFunctionResult('decimals',raw);
-          dec=Number(value);
-        } catch (_) {}
-
-        try {
-          const data=iface.encodeFunctionData('symbol',[]);
-          const raw=await rpcCall(item.addr,data,6000+i,2);
-          const [value]=iface.decodeFunctionResult('symbol',raw);
-          sym=value || sym;
-        } catch (_) {}
-
-        held.push({...item,decimals:dec,symbol:sym});
+      if (!held.length) {
+        select.innerHTML='';
+        const none=document.createElement('option');
+        none.value='';
+        none.textContent='No positive ERC-20 balance found';
+        select.appendChild(none);
+        el('betaUseBtn').disabled=true;
       }
-
-      held.sort((a,b)=>a.symbol.localeCompare(b.symbol));
-
-      const select=el('betaTokenSelect');
-      select.innerHTML='';
-      const first=document.createElement('option');
-      first.value='';
-      first.textContent=held.length ? 'Pick one…' : 'No positive ERC-20 balance found';
-      select.appendChild(first);
-
-      for (const h of held) {
-        const opt=document.createElement('option');
-        opt.value=h.addr;
-        opt.textContent=h.symbol+' · '+ethers.formatUnits(h.balance,h.decimals)+' · '+short(h.addr);
-        select.appendChild(opt);
-      }
-
-      el('betaScanResults').hidden=false;
-      el('betaUseBtn').disabled=true;
       hideScanLive();
       debugLog('scan done',{found:held.length});
 
