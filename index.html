@@ -81,9 +81,20 @@
   </section>
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.umd.min.js"></script>
-<script>
-(() => {
+<script type="module">
+(async () => {
+  let ethers;
+  try {
+    ethers = await import('https://cdn.jsdelivr.net/npm/ethers@6.15.0/+esm');
+  } catch (e) {
+    const s = document.getElementById('status');
+    if (s) {
+      s.className = 'status bad';
+      s.textContent = 'Erreur: impossible de charger ethers.js. Recharge la page.';
+    }
+    console.error(e);
+    return;
+  }
   const HYPEREVM = { hex:'0x3e6', name:'Hyperliquid EVM Testnet', rpc:'https://rpc.hyperliquid-testnet.xyz/evm', explorer:'https://app.hyperliquid-testnet.xyz/explorer' };
   const ELYSIUM = { rpc:'https://testnet-rpc.elysium.kinetiq.xyz' };
   const ROUTER = '0x1aAE2caD8B0249905492087EF230FcCEa3707C45';
@@ -213,7 +224,7 @@
   el('approveBtn').addEventListener('click',approve);
   el('bridgeBtn').addEventListener('click',bridge);
 
-  if (!window.ethers) setStatus('Erreur: ethers.js ne s\'est pas chargé. Recharge la page.','bad'); else if (!window.ethereum) setStatus('Aucun wallet injecté détecté. Ouvre cette page dans le navigateur dApp de Rabby/MetaMask.','amber');
+  if (!window.ethereum) setStatus('Aucun wallet injecté détecté. Ouvre cette page dans le navigateur dApp de Rabby/MetaMask.','amber');
 })();
 </script>
 </body>
