@@ -660,12 +660,12 @@
   }
 
   async function addChain(net) {
-    if (!window.ethereum) throw new Error('No injected wallet detected. Open this page inside your wallet's dApp browser.');
+    if (!window.ethereum) throw new Error("No injected wallet detected. Open this page inside your wallet's dApp browser.");
     await window.ethereum.request({method:'wallet_addEthereumChain',params:[chainParams(net)]});
   }
 
   async function switchHyperEVM() {
-    if (!window.ethereum) throw new Error('No injected wallet detected. Open this page inside your wallet's dApp browser.');
+    if (!window.ethereum) throw new Error("No injected wallet detected. Open this page inside your wallet's dApp browser.");
     try {
       await window.ethereum.request({method:'wallet_switchEthereumChain',params:[{chainId:HYPEREVM.chainId}]});
     } catch (e) {
@@ -680,7 +680,7 @@
   }
 
   async function switchElysium() {
-    if (!window.ethereum) throw new Error('No wallet detected. Open this page inside your wallet's dApp browser.');
+    if (!window.ethereum) throw new Error("No wallet detected. Open this page inside your wallet's dApp browser.");
     try {
       await window.ethereum.request({method:'wallet_switchEthereumChain',params:[{chainId:ELYSIUM.chainId}]});
     } catch (e) {
@@ -1234,7 +1234,7 @@
   el('buildText').textContent='Build: '+BUILD;
   debugLog('page ready',{build:BUILD,ua:navigator.userAgent});
 
-  if (!window.ethereum) setStatus('No wallet detected. On mobile, open this page inside your wallet's dApp browser.','amber');
+  if (!window.ethereum) setStatus("No wallet detected. On mobile, open this page inside your wallet's dApp browser.",'amber');
 })();
 </script>
 </body>
