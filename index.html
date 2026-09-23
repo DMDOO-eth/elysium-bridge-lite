@@ -31,6 +31,10 @@
     .kv div:nth-child(odd) { color:var(--muted); }
     .status { padding:10px 12px; border-radius:10px; background:#0d131c; border:1px solid var(--line); margin-top:10px; overflow-wrap:anywhere; }
     .ok { color:var(--ok); } .bad { color:var(--bad); } .amber { color:var(--warn); }
+    .scanLive { display:flex; align-items:center; gap:9px; margin-top:10px; color:var(--muted); }
+    .spinner { width:17px; height:17px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; flex:0 0 auto; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation:none; border-top-color:var(--ok); } }
     .steps { display:grid; grid-template-columns:repeat(4,1fr); gap:5px; margin:12px 0 16px; }
     .step { text-align:center; padding:8px 4px; border:1px solid var(--line); border-radius:8px; color:var(--muted); font-size:11px; }
     .step.active { border-color:var(--accent); color:var(--text); }
@@ -51,7 +55,7 @@
 <body>
 <main>
   <h1>Elysium Bridge Lite</h1>
-  <div class="sub">HyperEVM Testnet → Elysium Testnet · ERC-20 bridge</div>
+  <div class="sub">HyperEVM Testnet → Elysium Testnet · tiny bridge, real transactions</div>
 
   <div class="steps">
     <div id="s1" class="step active">1 Connect</div>
@@ -63,8 +67,8 @@
   <section class="card">
     <b>Networks</b>
     <div class="buttonRow">
-      <button id="addHyperBtn" class="secondary">Add HyperEVM Testnet</button>
-      <button id="addElysiumBtn" class="secondary">Add Elysium Testnet</button>
+      <button id="addHyperBtn" class="secondary">Add HyperEVM</button>
+      <button id="addElysiumBtn" class="secondary">Add Elysium</button>
       <a class="btnLink secondary" href="https://app.hyperliquid-testnet.xyz/explorer" target="_blank" rel="noopener noreferrer">HyperEVM Explorer ↗</a>
       <a class="btnLink secondary" href="https://elysium.kinetiq.xyz/testnet-explorer" target="_blank" rel="noopener noreferrer">Elysium Explorer ↗</a>
     </div>
@@ -74,42 +78,44 @@
     <div class="row">
       <div style="min-width:0">
         <b>Wallet</b>
-        <div id="walletText" class="small">Not connected</div>
+        <div id="walletText" class="small">Not connected yet</div>
       </div>
       <button id="connectBtn">Connect wallet</button>
     </div>
   </section>
 
   <section class="card">
-    <b>HyperEVM token</b>
+    <b>Pick a HyperEVM token</b>
     <div class="status" style="margin-top:12px">
-      <strong>Get the token's EVM address</strong>
+      <strong>Grab the token's EVM address</strong>
       <div class="small" style="margin-top:6px">
         1. Open your <b>Hyperliquid Testnet Portfolio</b>.<br>
-        2. If the token is still on HyperCore, use <b>Transfer to/from EVM</b> to move the amount you want to bridge to HyperEVM first.<br>
-        3. In <b>Balances</b>, click the small external-link icon next to the token in the <b>Contract</b> column.<br>
-        4. In the token details page, copy the <b>EVM Address</b> and paste it below.
+        2. Still on HyperCore? Use <b>Transfer to/from EVM</b> first — Elysium needs the ERC-20 on HyperEVM.<br>
+        3. In <b>Balances</b>, tap the small external-link icon in the token's <b>Contract</b> column.<br>
+        4. Copy the <b>EVM Address</b>, come back here, paste it below. Done.
       </div>
       <a class="btnLink secondary wide" href="https://app.hyperliquid-testnet.xyz/portfolio" target="_blank" rel="noopener noreferrer">Open Hyperliquid Testnet Portfolio ↗</a>
     </div>
 
     <details id="betaScanBox">
-      <summary>Beta · Scan HyperEVM token balances</summary>
+      <summary>Beta · Find my HyperEVM tokens</summary>
       <div class="detailsBody">
-        <p class="small">Temporary diagnostic mode. It first tests HARRR directly, verifies HARRR in Hyperliquid spot metadata, then scans linked HyperEVM contracts with throttling and retries. A token is kept as soon as balanceOf is positive; symbol/decimals failures no longer discard it. Detailed diagnostics are printed to the browser console. Nothing is signed.</p>
-        <button id="betaScanBtn" class="secondary wide" disabled>Run HARRR + API debug scan</button>
+        <p class="small">Still beta, but useful now: we scan Hyperliquid's linked HyperEVM contracts and keep the ones your wallet actually holds. Read-only — no signature, no transaction.</p>
+        <button id="betaScanBtn" class="secondary wide" disabled>Scan my HyperEVM tokens</button>
+        <div id="scanLive" class="scanLive" hidden><span class="spinner" aria-hidden="true"></span><span id="scanLiveText">Looking under the hood…</span></div>
+        <div class="small" style="margin-top:7px">Curious what it's doing? On desktop, open DevTools → Console and watch the calls roll by.</div>
         <div id="betaScanStats" class="small" style="margin-top:8px">Connect your wallet first.</div>
         <div id="betaScanResults" hidden>
-          <label for="betaTokenSelect">Tokens found on HyperEVM</label>
+          <label for="betaTokenSelect">Found on HyperEVM</label>
           <select id="betaTokenSelect"></select>
-          <button id="betaUseBtn" class="secondary wide" disabled>Use selected token</button>
+          <button id="betaUseBtn" class="secondary wide" disabled>Use this token</button>
         </div>
       </div>
     </details>
 
-    <label for="token">ERC-20 contract address</label>
+    <label for="token">Paste the ERC-20 contract address</label>
     <input id="token" class="mono" placeholder="0x…" autocomplete="off" autocapitalize="off" spellcheck="false" />
-    <button id="inspectBtn" class="secondary wide" disabled>Load token</button>
+    <button id="inspectBtn" class="secondary wide" disabled>Check this token</button>
 
     <div id="tokenInfo" hidden>
       <div class="kv">
@@ -119,23 +125,23 @@
         <div>Elysium token</div><div id="rep" class="mono"></div>
         <div>Status</div><div id="repState"></div>
       </div>
-      <label for="amount">Amount to bridge</label>
+      <label for="amount">How much are we sending?</label>
       <input id="amount" inputmode="decimal" placeholder="1" />
     </div>
   </section>
 
   <section class="card">
-    <b>Transactions</b>
-    <button id="approveBtn" class="wide" disabled>1 · Approve exact amount</button>
-    <button id="bridgeBtn" class="good wide" disabled>2 · Bridge to Elysium</button>
+    <b>Ready to move it?</b>
+    <button id="approveBtn" class="wide" disabled>1 · Approve this amount</button>
+    <button id="bridgeBtn" class="good wide" disabled>2 · Send it to Elysium</button>
     <div id="feeText" class="small" style="margin-top:8px"></div>
-    <div id="status" class="status">Ready.</div>
+    <div id="status" class="status">All set. Pick a token when you're ready.</div>
   </section>
 
   <footer>
-    <p><strong>Why this bridge?</strong> It gives standard HyperEVM ERC-20s a minimal path to Elysium without a custom frontend or token-specific integration. This page has no backend, takes no custody, and sends transactions directly from your wallet to Elysium's bridge contracts.</p>
+    <p><strong>Why this little bridge?</strong> Because doing this by hand in Remix is fun once. This page keeps the exact same bridge flow, minus the ceremony. No backend, no custody: transactions go straight from your wallet to Elysium's bridge contracts.</p>
     <details>
-      <summary>How it works technically</summary>
+      <summary>What actually happens under the hood</summary>
       <div class="detailsBody">
         <p>The app first asks the official HyperEVM router which gateway handles the token and computes the deterministic Elysium representation address.</p>
         <p>You approve only the exact amount being bridged. The Standard Gateway escrows the original ERC-20 on HyperEVM and a cross-chain retryable message delivers a 1:1 representation on Elysium.</p>
@@ -145,7 +151,7 @@
         <p><a href="https://elysium.kinetiq.xyz/docs/bridging-hyperevm-tokens-to-elysium" target="_blank" rel="noopener noreferrer">Read the official Elysium bridge documentation ↗</a></p>
       </div>
     </details>
-    <p class="small">Testnet only · No analytics · No wallet data storage · Use small amounts.</p>
+    <p class="small">Testnet only · No analytics · No wallet data storage · Keep it small while we test.</p>
   </footer>
 </main>
 
@@ -205,6 +211,13 @@
   function short(a) { return a ? a.slice(0,6)+'…'+a.slice(-4) : '—'; }
   function setStatus(msg, kind='') { el('status').className='status '+kind; el('status').textContent=msg; }
   function parseErr(e) { return e?.shortMessage || e?.reason || e?.info?.error?.message || e?.message || String(e); }
+  function showScanLive(text) {
+    el('scanLive').hidden=false;
+    el('scanLiveText').textContent=text;
+  }
+  function hideScanLive() {
+    el('scanLive').hidden=true;
+  }
 
   async function getElysiumCode(address) {
     try {
@@ -265,7 +278,7 @@
       el('inspectBtn').disabled=false;
       el('betaScanBtn').disabled=false;
       setStep(2);
-      setStatus('Wallet connected.','ok');
+      setStatus('Wallet connected. Nice. Pick a token.','ok');
     } catch(e) { setStatus(parseErr(e),'bad'); }
   }
 
@@ -273,7 +286,8 @@
     try {
       await switchHyperEVM();
       el('betaScanBtn').disabled=true;
-      el('betaScanStats').textContent='Debugging HARRR and Hyperliquid metadata…';
+      showScanLive('Warming up the scanner…');
+      el('betaScanStats').textContent='First pass: checking HARRR and loading Hyperliquid metadata…';
 
       console.group('[Elysium Bridge Lite] Beta token scan');
       console.log('Connected wallet:', account);
@@ -362,6 +376,7 @@
 
       const held=[];
       let cursor=0;
+      let completed=0;
       const workers=Math.min(2,Math.max(1,linked.length));
 
       const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -443,6 +458,11 @@
             });
           }
 
+          completed++;
+          if (completed===1 || completed%10===0 || completed===linked.length) {
+            showScanLive('Scanning contracts… '+completed+' / '+linked.length+' checked · '+held.length+' hit'+(held.length===1?'':'s')+' found');
+          }
+
           // Be gentle with wallet/RPC providers; avoid hundreds of calls at once.
           await sleep(40);
         }
@@ -469,6 +489,7 @@
       const directText=directHarrr
         ? directHarrr.formattedBalance+' '+directHarrr.symbol
         : 'FAILED';
+      hideScanLive();
       el('betaScanStats').textContent=
         'Direct HARRR balance: '+directText+
         ' · HARRR in spotMeta: '+harrrApiText+
@@ -483,10 +504,12 @@
       })));
       console.groupEnd();
     } catch(e) {
+      hideScanLive();
       console.error('[Elysium Bridge Lite] Beta scan fatal error:', e);
       try { console.groupEnd(); } catch (_) {}
       el('betaScanStats').textContent='Beta scan error: '+parseErr(e)+' — open DevTools Console for details.';
     } finally {
+      hideScanLive();
       el('betaScanBtn').disabled=false;
     }
   }
@@ -524,16 +547,16 @@
       const fee=MAX_SUBMISSION + maxGas*GAS_PRICE_BID;
       el('feeText').textContent='Provisioned delivery value: '+ethers.formatEther(fee)+' HYPE · maxGas '+maxGas;
       setStep(3);
-      setStatus('Token loaded.','ok');
+      setStatus('Token looks good. Choose an amount.','ok');
     } catch(e) { setStatus(parseErr(e),'bad'); }
   }
 
   function amountUnits() {
     const v=el('amount').value.trim();
-    if (!v) throw new Error('Enter an amount.');
+    if (!v) throw new Error('Give me an amount first.');
     const units=ethers.parseUnits(v,tokenDecimals);
-    if (units<=0n) throw new Error('Amount must be greater than zero.');
-    if (units>tokenBalance) throw new Error('Insufficient token balance.');
+    if (units<=0n) throw new Error('Zero is a very safe bridge, but not a useful one. Pick an amount above 0.');
+    if (units>tokenBalance) throw new Error('That is more than this wallet holds.');
     return units;
   }
 
@@ -543,14 +566,14 @@
       const units=amountUnits();
       const allowance=await token.allowance(account,gateway);
       if (allowance<units) {
-        setStatus('Waiting for approval signature…','amber');
+        setStatus('Approval time — check your wallet.','amber');
         const tx=await token.approve(gateway,units);
-        setStatus('Approval sent: '+tx.hash,'amber');
+        setStatus('Approval sent. Waiting for confirmation: '+tx.hash,'amber');
         await tx.wait();
       }
       el('bridgeBtn').disabled=false;
       setStep(4);
-      setStatus('Exact approval confirmed.','ok');
+      setStatus('Approval confirmed. One more click.','ok');
     } catch(e) { setStatus(parseErr(e),'bad'); }
   }
 
@@ -561,19 +584,19 @@
       const data=ethers.AbiCoder.defaultAbiCoder().encode(['uint256','bytes'],[MAX_SUBMISSION,'0x']);
       const fee=MAX_SUBMISSION + maxGas*GAS_PRICE_BID;
       const router=new ethers.Contract(ROUTER,ROUTER_ABI,signer);
-      setStatus('Waiting for bridge signature…','amber');
+      setStatus('Bridge time — check your wallet.','amber');
       const tx=await router.outboundTransfer(tokenAddress,account,units,maxGas,GAS_PRICE_BID,data,{value:fee});
-      setStatus('Bridge sent: '+tx.hash,'amber');
+      setStatus('Bridge sent. Now we wait for confirmation: '+tx.hash,'amber');
       await tx.wait();
       setStep(4);
       el('s4').className='step done';
-      setStatus('HyperEVM deposit confirmed. Delivery to Elysium is now in progress.','ok');
+      setStatus('HyperEVM side confirmed. Elysium delivery is on the way.','ok');
       el('bridgeBtn').disabled=true;
     } catch(e) { setStatus(parseErr(e),'bad'); }
   }
 
-  el('addHyperBtn').addEventListener('click',async()=>{ try { await addChain(HYPEREVM); setStatus('HyperEVM Testnet added to wallet.','ok'); } catch(e) { setStatus(parseErr(e),'bad'); } });
-  el('addElysiumBtn').addEventListener('click',async()=>{ try { await addChain(ELYSIUM); setStatus('Elysium Testnet added to wallet.','ok'); } catch(e) { setStatus(parseErr(e),'bad'); } });
+  el('addHyperBtn').addEventListener('click',async()=>{ try { await addChain(HYPEREVM); setStatus('HyperEVM Testnet added. Easy.','ok'); } catch(e) { setStatus(parseErr(e),'bad'); } });
+  el('addElysiumBtn').addEventListener('click',async()=>{ try { await addChain(ELYSIUM); setStatus('Elysium Testnet added. Easy.','ok'); } catch(e) { setStatus(parseErr(e),'bad'); } });
   el('connectBtn').addEventListener('click',connect);
   el('betaScanBtn').addEventListener('click',betaScan);
   el('betaTokenSelect').addEventListener('change',e=>{ el('betaUseBtn').disabled=!e.target.value; });
@@ -586,7 +609,7 @@
   el('inspectBtn').addEventListener('click',inspectToken);
   el('approveBtn').addEventListener('click',approve);
   el('bridgeBtn').addEventListener('click',bridge);
-  if (!window.ethereum) setStatus('No injected wallet detected. On mobile, open this page inside Rabby/MetaMask dApp browser.','amber');
+  if (!window.ethereum) setStatus('No wallet detected. On mobile, open this page inside Rabby or MetaMask’s dApp browser.','amber');
 })();
 </script>
 </body>
