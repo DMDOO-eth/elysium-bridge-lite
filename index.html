@@ -273,7 +273,7 @@
     return;
   }
 
-  const BUILD = '2026.09.24-approval-debug-1';
+  const BUILD = '2026.09.24-rabby-rawtx-1';
   const HYPEREVM = {
     chainId:'0x3e6',
     name:'Hyperliquid EVM Testnet',
@@ -312,6 +312,8 @@
   let browserProvider, signer, account, token, tokenAddress, tokenSymbol, tokenDecimals, tokenBalance, gateway, repAddress;
   let returnOriginal, returnRep, returnDecimals, returnBalance;
   let inspectingToken=false;
+  let scanActive=false;
+  let scanCancelled=false;
   let maxGas = 600000n;
 
   function short(a) { return a ? a.slice(0,6)+'…'+a.slice(-4) : '—'; }
@@ -358,6 +360,14 @@
   }
   function hideScanLive() {
     el('scanLive').hidden=true;
+  }
+
+  function stopTokenScan(reason='token selected') {
+    if (!scanActive) return;
+    scanCancelled=true;
+    hideScanLive();
+    debugLog('scan stop requested',{reason});
+    el('betaScanStats').textContent='Scan paused — using the selected token. Your last completed scan stays saved.';
   }
 
   function setUseTokenBusy(busy) {
@@ -512,6 +522,48 @@
   }
 
   let rpcReadId=10000;
+
+  async function rpcMethod(rpc,method,params,label=method) {
+    const controller=new AbortController();
+    const timeout=setTimeout(()=>controller.abort(),10000);
+    try {
+      const res=await fetch(rpc,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({jsonrpc:'2.0',id:rpcReadId++,method,params}),
+        signal:controller.signal
+      });
+      if (!res.ok) throw new Error('RPC HTTP '+res.status);
+      const json=await res.json();
+      if (json?.error) throw new Error(json.error.message || 'RPC error');
+      if (!Object.prototype.hasOwnProperty.call(json || {},'result')) throw new Error('RPC result missing');
+      return json.result;
+    } catch(e) {
+      debugLog(label+' failed',parseErr(e));
+      throw e;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function waitForPublicReceipt(hash,timeoutMs=120000) {
+    const started=Date.now();
+    while (Date.now()-started<timeoutMs) {
+      const receipt=await rpcMethod(
+        HYPEREVM.rpc,
+        'eth_getTransactionReceipt',
+        [hash],
+        'receipt check'
+      );
+      if (receipt) {
+        if (receipt.status==='0x0') throw new Error('Transaction reverted on HyperEVM.');
+        return receipt;
+      }
+      await new Promise(r=>setTimeout(r,1400));
+    }
+    throw new Error('Transaction was sent, but confirmation is taking longer than expected. Check the explorer.');
+  }
+
   async function rpcEthCall(rpc,to,data,label='eth_call') {
     const controller=new AbortController();
     const timeout=setTimeout(()=>controller.abort(),8000);
@@ -629,6 +681,8 @@
   }
 
   async function betaScan() {
+    scanActive=true;
+    scanCancelled=false;
     try {
       await switchHyperEVM();
       el('betaScanBtn').disabled=true;
@@ -716,6 +770,7 @@
 
       async function worker(workerId) {
         while (true) {
+          if (scanCancelled) return;
           const index=cursor++;
           if (index>=linked.length) return;
           const item=linked[index];
@@ -774,6 +829,11 @@
       debugLog('RPC single-call scan',{workers:workerCount,mobile:isMobile});
       await Promise.all(Array.from({length:workerCount},(_,i)=>worker(i)));
 
+      if (scanCancelled) {
+        debugLog('scan paused',{checked:completed,total:linked.length,found:held.length});
+        return;
+      }
+
       if (!held.length) {
         select.innerHTML='';
         const none=document.createElement('option');
@@ -796,6 +856,7 @@
       const restored=renderCachedScan();
       if (!restored) el('betaScanStats').textContent='Scan hit a snag: '+parseErr(e);
     } finally {
+      scanActive=false;
       hideScanLive();
       el('betaScanBtn').disabled=false;
     }
@@ -983,6 +1044,7 @@
 
   async function approve() {
     try {
+      stopTokenScan('approval');
       debugLog('approve start',{token:tokenAddress,gateway,amount:el('amount').value});
       await switchHyperEVM();
       const units=amountUnits();
@@ -1000,17 +1062,44 @@
       debugLog('allowance checked',{allowance:allowance.toString(),needed:units.toString()});
 
       if (allowance<units) {
-        setStatus('Approval time — check your wallet.','amber');
+        setStatus('Approval time — opening Rabby…','amber');
 
-        // Re-bind the token to the signer created by the latest mobile wallet/network switch.
-        // Rabby iOS can reject a transaction if a Contract still holds an older BrowserProvider signer.
-        const liveToken=new ethers.Contract(tokenAddress,ERC20_ABI,signer);
-        debugLog('approval request',{token:tokenAddress,spender:gateway,units:units.toString()});
-        const tx=await liveToken.approve(gateway,units);
-        debugLog('approval submitted',{hash:tx.hash});
+        const data=ercIface.encodeFunctionData('approve',[gateway,units]);
+        const unsigned={from:account,to:tokenAddress,data,value:'0x0'};
 
-        setStatus('Approval sent. Waiting for confirmation: '+tx.hash,'amber');
-        await tx.wait();
+        // Populate the boring network fields ourselves from the public HyperEVM RPC.
+        // This avoids ethers BrowserProvider doing extra read calls through Rabby's flaky mobile RPC.
+        const [gasEstimateHex,gasPrice,nonce] = await Promise.all([
+          rpcMethod(HYPEREVM.rpc,'eth_estimateGas',[unsigned],'approval gas estimate'),
+          rpcMethod(HYPEREVM.rpc,'eth_gasPrice',[],'approval gas price'),
+          rpcMethod(HYPEREVM.rpc,'eth_getTransactionCount',[account,'pending'],'approval nonce')
+        ]);
+        const gasEstimate=BigInt(gasEstimateHex);
+        const gas=ethers.toQuantity((gasEstimate*125n)/100n);
+
+        const request={
+          ...unsigned,
+          gas,
+          gasPrice,
+          nonce
+        };
+
+        debugLog('approval raw request',{
+          token:tokenAddress,
+          spender:gateway,
+          units:units.toString(),
+          gas,
+          nonce
+        });
+
+        const hash=await window.ethereum.request({
+          method:'eth_sendTransaction',
+          params:[request]
+        });
+        debugLog('approval submitted',{hash});
+
+        setStatus('Approval sent. Waiting for HyperEVM confirmation: '+hash,'amber');
+        await waitForPublicReceipt(hash);
       }
 
       el('bridgeBtn').disabled=false;
@@ -1065,6 +1154,7 @@
   el('betaUseBtn').addEventListener('click',async()=>{
     const addr=el('betaTokenSelect').value;
     if (!addr || inspectingToken) return;
+    stopTokenScan('Use this token');
     el('token').value=addr;
     setUseTokenBusy(true);
     setStatus('Good pick. Checking the bridge route…','amber');
