@@ -54,7 +54,13 @@
     details[open] summary::before { content:"− "; }
     .detailsBody { padding:0 12px 12px; }
     .detailsBody p { margin:7px 0; }
-    @media (max-width:440px) { .buttonRow { grid-template-columns:1fr; } .kv { grid-template-columns:105px 1fr; } }
+    @media (max-width:440px) {
+      .buttonRow { grid-template-columns:1fr; }
+      .networkGrid { grid-template-columns:1fr 1fr; gap:6px; }
+      .networkGrid button, .networkGrid .btnLink { min-height:36px; padding:7px 6px; font-size:12px; border-radius:8px; }
+      .kv { grid-template-columns:105px 1fr; }
+      .hero { min-height:190px; }
+    }
   </style>
 </head>
 <body>
@@ -75,7 +81,7 @@
 
   <section class="card">
     <b>Networks</b>
-    <div class="buttonRow">
+    <div class="buttonRow networkGrid">
       <button id="addHyperBtn" class="secondary">Add HyperEVM</button>
       <button id="addElysiumBtn" class="secondary">Add Elysium</button>
       <a class="btnLink secondary" href="https://app.hyperliquid-testnet.xyz/explorer" target="_blank" rel="noopener noreferrer">HyperEVM Explorer ↗</a>
@@ -170,14 +176,23 @@
     <details id="returnTripBox">
       <summary>Return trip · Elysium → HyperEVM</summary>
       <div class="detailsBody">
-        <p class="small">Got the representation on Elysium and want the original back? Paste the <b>original HyperEVM token address</b>. We'll switch to Elysium, find the representation, check your balance, then burn it through the canonical router. No approval needed.</p>
-        <label for="returnToken">Original HyperEVM token address</label>
+        <p class="small">Got a bridged token on Elysium? Pick one we've already bridged in this browser, or paste <b>either</b> the original HyperEVM address <b>or</b> the Elysium representation address. We'll sort out which one you gave us.</p>
+
+        <div id="returnHistoryWrap" hidden>
+          <label for="returnHistorySelect">Previously bridged with this browser</label>
+          <select id="returnHistorySelect"></select>
+          <button id="useReturnHistoryBtn" class="secondary wide" disabled>Use this one</button>
+          <div class="small" style="margin-top:6px">Saved locally in this browser only — no account, no server, no analytics.</div>
+        </div>
+
+        <label for="returnToken">HyperEVM original or Elysium representation</label>
         <input id="returnToken" class="mono" placeholder="0x…" autocomplete="off" autocapitalize="off" spellcheck="false" />
-        <button id="prepareReturnBtn" class="secondary wide" disabled>Check my Elysium balance</button>
+        <button id="prepareReturnBtn" class="secondary wide" disabled>Figure it out & check my balance</button>
 
         <div id="returnInfo" hidden>
           <div class="kv">
-            <div>Representation</div><div id="returnRep" class="mono"></div>
+            <div>HyperEVM original</div><div id="returnOriginal" class="mono"></div>
+            <div>Elysium rep</div><div id="returnRep" class="mono"></div>
             <div>Balance</div><div id="returnBalance"></div>
           </div>
           <label for="returnAmount">How much are we bringing back?</label>
@@ -248,7 +263,8 @@
     'function decimals() view returns (uint8)',
     'function balanceOf(address) view returns (uint256)',
     'function allowance(address,address) view returns (uint256)',
-    'function approve(address,uint256) returns (bool)'
+    'function approve(address,uint256) returns (bool)',
+    'function l1Address() view returns (address)'
   ];
   const ROUTER_ABI = [
     'function getGateway(address token) view returns (address)',
@@ -257,7 +273,7 @@
   ];
 
   const el = id => document.getElementById(id);
-  let browserProvider, signer, account, token, tokenAddress, tokenDecimals, tokenBalance, gateway, repAddress;
+  let browserProvider, signer, account, token, tokenAddress, tokenSymbol, tokenDecimals, tokenBalance, gateway, repAddress;
   let returnOriginal, returnRep, returnDecimals, returnBalance;
   let maxGas = 600000n;
 
@@ -270,6 +286,54 @@
   }
   function hideScanLive() {
     el('scanLive').hidden=true;
+  }
+
+  function historyKey() {
+    return account ? 'elysium-bridge-lite:history:'+account.toLowerCase() : null;
+  }
+
+  function getBridgeHistory() {
+    try {
+      const key=historyKey();
+      if (!key) return [];
+      const value=JSON.parse(localStorage.getItem(key) || '[]');
+      return Array.isArray(value) ? value : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function saveBridgeHistory(entry) {
+    try {
+      const key=historyKey();
+      if (!key) return;
+      const list=getBridgeHistory().filter(x =>
+        (x.original || '').toLowerCase() !== entry.original.toLowerCase()
+      );
+      list.unshift(entry);
+      localStorage.setItem(key,JSON.stringify(list.slice(0,30)));
+      renderBridgeHistory();
+    } catch (_) {}
+  }
+
+  function renderBridgeHistory() {
+    const wrap=el('returnHistoryWrap');
+    const select=el('returnHistorySelect');
+    if (!wrap || !select) return;
+    const list=getBridgeHistory();
+    select.innerHTML='';
+    const first=document.createElement('option');
+    first.value='';
+    first.textContent=list.length ? 'Pick a previous bridge…' : 'No saved bridges yet';
+    select.appendChild(first);
+    for (const item of list) {
+      const opt=document.createElement('option');
+      opt.value=item.rep || item.original;
+      opt.textContent=(item.symbol || 'TOKEN')+' · '+short(item.original)+' → '+short(item.rep);
+      select.appendChild(opt);
+    }
+    wrap.hidden=!list.length;
+    el('useReturnHistoryBtn').disabled=true;
   }
 
   async function getElysiumCode(address) {
@@ -346,6 +410,7 @@
       el('inspectBtn').disabled=false;
       el('betaScanBtn').disabled=false;
       el('prepareReturnBtn').disabled=false;
+      renderBridgeHistory();
       setStep(2);
       setStatus('Wallet connected. Nice. Pick a token.','ok');
     } catch(e) { setStatus(parseErr(e),'bad'); }
@@ -356,11 +421,8 @@
       await switchHyperEVM();
       el('betaScanBtn').disabled=true;
       el('betaScanResults').hidden=true;
-      showScanLive('Scanning HyperEVM contracts… this can take a minute.');
+      showScanLive('Scanning HyperEVM contracts… hang tight.');
       el('betaScanStats').textContent='Loading Hyperliquid token metadata…';
-
-      console.group('[Elysium Bridge Lite] HyperEVM token scan');
-      console.log('Connected wallet:', account);
 
       const response=await fetch(HYPER_API,{
         method:'POST',
@@ -379,115 +441,100 @@
           ? t.evmContract
           : t?.evmContract?.address;
         if (!raw || !ethers.isAddress(raw)) continue;
-
         const addr=ethers.getAddress(raw);
         const key=addr.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
-        linked.push({
-          addr,
-          name:t.name || 'TOKEN',
-          tokenId:t.tokenId || ''
-        });
+        linked.push({addr,name:t.name || 'TOKEN',tokenId:t.tokenId || ''});
       }
-
-      console.log('spotMeta tokens:', allTokens.length);
-      console.log('Linked HyperEVM contracts:', linked.length);
-      console.table(linked.map(x=>({name:x.name,tokenId:x.tokenId,address:x.addr})));
 
       el('betaScanStats').textContent=
-        linked.length+' linked HyperEVM contracts found. Checking wallet balances…';
+        linked.length+' linked HyperEVM contracts found. Reading balances in batches…';
+
+      const iface=new ethers.Interface(ERC20_ABI);
+      const balanceData=iface.encodeFunctionData('balanceOf',[account]);
+      const heldRaw=[];
+      const chunkSize=25;
+
+      async function batchRpc(chunk,offset) {
+        const controller=new AbortController();
+        const timeout=setTimeout(()=>controller.abort(),8000);
+        try {
+          const reqs=chunk.map((item,i)=>({
+            jsonrpc:'2.0',
+            id:offset+i+1,
+            method:'eth_call',
+            params:[{to:item.addr,data:balanceData},'latest']
+          }));
+          const res=await fetch(HYPEREVM.rpc,{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(reqs),
+            signal:controller.signal
+          });
+          if (!res.ok) throw new Error('RPC HTTP '+res.status);
+          const json=await res.json();
+          if (!Array.isArray(json)) throw new Error('RPC batch response unsupported');
+          const byId=new Map(json.map(x=>[x.id,x]));
+          for (let i=0;i<chunk.length;i++) {
+            const row=byId.get(offset+i+1);
+            if (!row?.result || row.error) continue;
+            try {
+              const [bal]=iface.decodeFunctionResult('balanceOf',row.result);
+              if (bal>0n) heldRaw.push({...chunk[i],balance:bal});
+            } catch (_) {}
+          }
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
+      let fastScanWorked=true;
+      try {
+        for (let i=0;i<linked.length;i+=chunkSize) {
+          showScanLive('Scanning HyperEVM… '+heldRaw.length+' token'+(heldRaw.length===1?'':'s')+' found so far.');
+          await batchRpc(linked.slice(i,i+chunkSize),i);
+        }
+      } catch (fastError) {
+        fastScanWorked=false;
+        console.warn('Fast RPC batch scan unavailable:',fastError);
+      }
+
+      // Desktop-only fallback: injected wallets can handle the slow path.
+      // On mobile this is intentionally skipped; hundreds of injected eth_calls can stall the dApp browser.
+      if (!fastScanWorked) {
+        const isMobile=window.matchMedia?.('(pointer:coarse)').matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+        if (isMobile) {
+          throw new Error('Fast scan is not available in this mobile wallet browser yet. Open the manual address helper below — it works fine.');
+        }
+
+        showScanLive('Fast lane unavailable — doing the slower wallet scan…');
+        heldRaw.length=0;
+        for (const item of linked) {
+          try {
+            const contract=new ethers.Contract(item.addr,ERC20_ABI,browserProvider);
+            const bal=await contract.balanceOf(account);
+            if (bal>0n) heldRaw.push({...item,balance:bal});
+          } catch (_) {}
+        }
+      }
 
       const held=[];
-      let cursor=0;
-      const workers=Math.min(2,Math.max(1,linked.length));
-      const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-
-      async function callWithRetry(fn,label,item,maxAttempts=3) {
-        let lastError;
-        for (let attempt=1; attempt<=maxAttempts; attempt++) {
-          try {
-            return await fn();
-          } catch (e) {
-            lastError=e;
-            console.warn(label+' attempt '+attempt+' failed:', {
-              name:item.name,
-              tokenId:item.tokenId,
-              address:item.addr,
-              error:parseErr(e)
-            });
-            if (attempt<maxAttempts) await sleep(120*attempt);
-          }
-        }
-        throw lastError;
+      for (const item of heldRaw) {
+        const contract=new ethers.Contract(item.addr,ERC20_ABI,browserProvider);
+        let dec=18;
+        let sym=item.name || 'TOKEN';
+        try { dec=Number(await contract.decimals()); } catch (_) {}
+        try { sym=await contract.symbol() || sym; } catch (_) {}
+        held.push({...item,decimals:dec,symbol:sym});
       }
 
-      async function worker() {
-        while (cursor<linked.length) {
-          const item=linked[cursor++];
-          const contract=new ethers.Contract(item.addr,ERC20_ABI,browserProvider);
-
-          try {
-            const bal=await callWithRetry(
-              ()=>contract.balanceOf(account),
-              'balanceOf',
-              item
-            );
-
-            console.log('balanceOf OK:', {
-              name:item.name,
-              tokenId:item.tokenId,
-              address:item.addr,
-              rawBalance:bal.toString()
-            });
-
-            if (bal>0n) {
-              let dec=18;
-              let sym=item.name || 'TOKEN';
-
-              try {
-                dec=Number(await callWithRetry(()=>contract.decimals(),'decimals',item,2));
-              } catch (_) {
-                console.warn('Using fallback decimals=18 for:', item.addr);
-              }
-
-              try {
-                sym=await callWithRetry(()=>contract.symbol(),'symbol',item,2) || sym;
-              } catch (_) {
-                console.warn('Using fallback symbol for:', item.addr);
-              }
-
-              held.push({...item,balance:bal,decimals:dec,symbol:sym});
-              showScanLive('Still scanning… '+held.length+' token'+(held.length===1?'':'s')+' found so far.');
-              console.log('POSITIVE ERC-20 BALANCE:', {
-                symbol:sym,
-                address:item.addr,
-                balance:ethers.formatUnits(bal,dec)
-              });
-            }
-          } catch (e) {
-            console.warn('Balance check skipped after retries:', {
-              name:item.name,
-              tokenId:item.tokenId,
-              address:item.addr,
-              error:parseErr(e)
-            });
-          }
-
-          await sleep(40);
-        }
-      }
-
-      await Promise.all(Array.from({length:workers},worker));
       held.sort((a,b)=>a.symbol.localeCompare(b.symbol));
-
       const select=el('betaTokenSelect');
       select.innerHTML='';
       const first=document.createElement('option');
       first.value='';
-      first.textContent=held.length
-        ? 'Pick one…'
-        : 'No positive ERC-20 balance found';
+      first.textContent=held.length ? 'Pick one…' : 'No positive ERC-20 balance found';
       select.appendChild(first);
 
       for (const h of held) {
@@ -500,22 +547,13 @@
       el('betaScanResults').hidden=false;
       el('betaUseBtn').disabled=true;
       hideScanLive();
-
       el('betaScanStats').textContent=held.length
-        ? 'Done. Found '+held.length+' token'+(held.length===1?'':'s')+' on HyperEVM. Pick one and we can bridge it.'
-        : 'Scan finished, but no positive balance showed up. Use the manual EVM-address fallback below.';
-
-      console.log('FINAL positive balances:', held.map(h=>({
-        symbol:h.symbol,
-        address:h.addr,
-        balance:ethers.formatUnits(h.balance,h.decimals)
-      })));
-      console.groupEnd();
+        ? 'Done. Found '+held.length+' token'+(held.length===1?'':'s')+' on HyperEVM. Pick one.'
+        : 'Scan finished, but nothing showed up. The manual address route below is the reliable fallback.';
     } catch(e) {
       hideScanLive();
-      console.error('[Elysium Bridge Lite] Token scan error:', e);
-      try { console.groupEnd(); } catch (_) {}
-      el('betaScanStats').textContent='Scan hit a snag: '+parseErr(e)+' — manual mode still works.';
+      console.error('[Elysium Bridge Lite] Token scan error:',e);
+      el('betaScanStats').textContent='Scan hit a snag: '+parseErr(e);
     } finally {
       hideScanLive();
       el('betaScanBtn').disabled=false;
@@ -532,7 +570,7 @@
         token.name().catch(()=>''), token.symbol(), token.decimals(), token.balanceOf(account),
         router.getGateway(tokenAddress), router.calculateL2TokenAddress(tokenAddress)
       ]);
-      tokenDecimals=Number(decimals); tokenBalance=bal;
+      tokenSymbol=symbol; tokenDecimals=Number(decimals); tokenBalance=bal;
       gateway=ethers.getAddress(gw); repAddress=ethers.getAddress(rep);
       if (gateway.toLowerCase() !== STANDARD_GATEWAY.toLowerCase()) throw new Error('Custom gateway detected. This Lite version only supports the Elysium Standard Gateway.');
 
@@ -568,25 +606,49 @@
   async function prepareReturn() {
     try {
       await switchElysium();
-      returnOriginal=ethers.getAddress(el('returnToken').value.trim());
+      const entered=ethers.getAddress(el('returnToken').value.trim());
       const router=new ethers.Contract(ELYSIUM_ROUTER,ROUTER_ABI,signer);
-      returnRep=ethers.getAddress(await router.calculateL2TokenAddress(returnOriginal));
+
+      // If the user pasted an Elysium canonical representation, it exposes l1Address().
+      // We also round-trip it through the router so an arbitrary contract cannot spoof the route.
+      let enteredIsRep=false;
+      try {
+        const maybeRep=new ethers.Contract(entered,ERC20_ABI,signer);
+        const parent=ethers.getAddress(await maybeRep.l1Address());
+        const calculated=ethers.getAddress(await router.calculateL2TokenAddress(parent));
+        if (calculated.toLowerCase()===entered.toLowerCase()) {
+          returnOriginal=parent;
+          returnRep=entered;
+          enteredIsRep=true;
+        }
+      } catch (_) {}
+
+      if (!enteredIsRep) {
+        returnOriginal=entered;
+        returnRep=ethers.getAddress(await router.calculateL2TokenAddress(returnOriginal));
+      }
+
       const repToken=new ethers.Contract(returnRep,ERC20_ABI,signer);
       const [sym,dec,bal]=await Promise.all([
         repToken.symbol(),
         repToken.decimals(),
         repToken.balanceOf(account)
       ]);
+
       returnDecimals=Number(dec);
       returnBalance=bal;
+      el('returnOriginal').textContent=returnOriginal;
       el('returnRep').textContent=returnRep;
       el('returnBalance').textContent=ethers.formatUnits(bal,returnDecimals)+' '+sym;
       el('returnInfo').hidden=false;
       el('returnBtn').disabled=bal<=0n;
+
       setReturnStatus(
         bal>0n
-          ? 'Found it. No approval on the way back — the bridge burns the Elysium representation directly.'
-          : 'Representation found, but this wallet has no balance to bring back.',
+          ? (enteredIsRep
+              ? 'Yep — that was the Elysium address. Original found, balance found, route looks clean.'
+              : 'Yep — that was the HyperEVM original. Elysium representation and balance found.')
+          : 'Route found, but this wallet has no representation balance to bring back.',
         bal>0n ? 'ok' : 'amber'
       );
     } catch(e) {
@@ -664,6 +726,14 @@
       el('bridgeLinks').hidden=false;
       setStatus('Bridge sent. Now we wait for confirmation: '+tx.hash,'amber');
       await tx.wait();
+      saveBridgeHistory({
+        original:tokenAddress,
+        rep:repAddress,
+        symbol:tokenSymbol || 'TOKEN',
+        decimals:tokenDecimals,
+        txHash:tx.hash,
+        savedAt:Date.now()
+      });
       setStep(4);
       el('s4').className='step done';
       setStatus('HyperEVM side confirmed. Elysium delivery is on the way.','ok');
@@ -684,6 +754,13 @@
     await inspectToken();
   });
   el('inspectBtn').addEventListener('click',inspectToken);
+  el('returnHistorySelect').addEventListener('change',e=>{ el('useReturnHistoryBtn').disabled=!e.target.value; });
+  el('useReturnHistoryBtn').addEventListener('click',async()=>{
+    const addr=el('returnHistorySelect').value;
+    if (!addr) return;
+    el('returnToken').value=addr;
+    await prepareReturn();
+  });
   el('prepareReturnBtn').addEventListener('click',prepareReturn);
   el('returnBtn').addEventListener('click',returnToHyperEVM);
   el('approveBtn').addEventListener('click',approve);
