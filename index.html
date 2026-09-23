@@ -273,7 +273,7 @@
     return;
   }
 
-  const BUILD = '2026.09.24-rabby-rawtx-1';
+  const BUILD = '2026.09.24-mobile-tx-2';
   const HYPEREVM = {
     chainId:'0x3e6',
     name:'Hyperliquid EVM Testnet',
@@ -467,6 +467,35 @@
     }
   }
 
+  function saveFoundTokenToCache(token) {
+    try {
+      const key=scanCacheKey();
+      if (!key || !token?.addr) return;
+
+      const previous=getScanCache();
+      const list=Array.isArray(previous?.tokens) ? [...previous.tokens] : [];
+      const clean={
+        addr:token.addr,
+        symbol:token.symbol || token.name || 'TOKEN',
+        decimals:Number.isFinite(Number(token.decimals)) ? Number(token.decimals) : 18
+      };
+      const index=list.findIndex(x =>
+        (x.addr || '').toLowerCase() === clean.addr.toLowerCase()
+      );
+      if (index>=0) list[index]=clean;
+      else list.push(clean);
+
+      localStorage.setItem(key,JSON.stringify({
+        scannedAt:Date.now(),
+        tokens:list
+      }));
+      renderScanCacheMeta();
+      debugLog('scan token cached',{symbol:clean.symbol,address:clean.addr,total:list.length});
+    } catch(e) {
+      debugLog('scan token cache failed',parseErr(e));
+    }
+  }
+
   function formatScanDate(ts) {
     try {
       return new Intl.DateTimeFormat(undefined,{
@@ -631,12 +660,12 @@
   }
 
   async function addChain(net) {
-    if (!window.ethereum) throw new Error('No injected wallet detected. Open this page inside Rabby/MetaMask dApp browser.');
+    if (!window.ethereum) throw new Error('No injected wallet detected. Open this page inside your wallet's dApp browser.');
     await window.ethereum.request({method:'wallet_addEthereumChain',params:[chainParams(net)]});
   }
 
   async function switchHyperEVM() {
-    if (!window.ethereum) throw new Error('No injected wallet detected. Open this page inside Rabby/MetaMask dApp browser.');
+    if (!window.ethereum) throw new Error('No injected wallet detected. Open this page inside your wallet's dApp browser.');
     try {
       await window.ethereum.request({method:'wallet_switchEthereumChain',params:[{chainId:HYPEREVM.chainId}]});
     } catch (e) {
@@ -651,7 +680,7 @@
   }
 
   async function switchElysium() {
-    if (!window.ethereum) throw new Error('No wallet detected. Open this page inside Rabby or MetaMask’s dApp browser.');
+    if (!window.ethereum) throw new Error('No wallet detected. Open this page inside your wallet's dApp browser.');
     try {
       await window.ethereum.request({method:'wallet_switchEthereumChain',params:[{chainId:ELYSIUM.chainId}]});
     } catch (e) {
@@ -798,6 +827,7 @@
 
               const found={...item,balance:bal,decimals:dec,symbol:sym};
               held.push(found);
+              saveFoundTokenToCache(found);
 
               // First hit replaces the "Scanning…" placeholder with a real picker.
               if (held.length===1) {
@@ -878,7 +908,7 @@
       const routerIface=new ethers.Interface(ROUTER_ABI);
 
       // Mobile wallet browsers can be flaky for read-only contract calls.
-      // Use the public HyperEVM RPC for reads; keep Rabby only for signatures/transactions.
+      // Use the public HyperEVM RPC for reads; keep the injected wallet only for signatures/transactions.
       const [symbolResult,decimalsResult,balanceResult,gatewayResult,repResult] = await Promise.all([
         readContract(HYPEREVM.rpc,tokenAddress,ercIface,'symbol',[],'token symbol'),
         readContract(HYPEREVM.rpc,tokenAddress,ercIface,'decimals',[],'token decimals'),
@@ -1067,13 +1097,13 @@
       debugLog('allowance checked',{allowance:allowance.toString(),needed:units.toString()});
 
       if (allowance<units) {
-        setStatus('Approval time — opening Rabby…','amber');
+        setStatus('Approval time — opening your wallet…','amber');
 
         const data=ercIface.encodeFunctionData('approve',[gateway,units]);
         const unsigned={from:account,to:tokenAddress,data,value:'0x0'};
 
         // Populate the boring network fields ourselves from the public HyperEVM RPC.
-        // This avoids ethers BrowserProvider doing extra read calls through Rabby's flaky mobile RPC.
+        // This avoids ethers BrowserProvider doing extra read calls through a mobile wallet's injected RPC.
         const [gasEstimateHex,gasPrice,nonce] = await Promise.all([
           rpcMethod(HYPEREVM.rpc,'eth_estimateGas',[unsigned],'approval gas estimate'),
           rpcMethod(HYPEREVM.rpc,'eth_gasPrice',[],'approval gas price'),
@@ -1204,7 +1234,7 @@
   el('buildText').textContent='Build: '+BUILD;
   debugLog('page ready',{build:BUILD,ua:navigator.userAgent});
 
-  if (!window.ethereum) setStatus('No wallet detected. On mobile, open this page inside Rabby or MetaMask’s dApp browser.','amber');
+  if (!window.ethereum) setStatus('No wallet detected. On mobile, open this page inside your wallet's dApp browser.','amber');
 })();
 </script>
 </body>
