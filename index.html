@@ -81,7 +81,7 @@
   </section>
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.umd.min.js"></script>
 <script>
 (() => {
   const HYPEREVM = { hex:'0x3e6', name:'Hyperliquid EVM Testnet', rpc:'https://rpc.hyperliquid-testnet.xyz/evm', explorer:'https://app.hyperliquid-testnet.xyz/explorer' };
@@ -213,7 +213,7 @@
   el('approveBtn').addEventListener('click',approve);
   el('bridgeBtn').addEventListener('click',bridge);
 
-  if (!window.ethereum) setStatus('Sur mobile, ouvre la page dans le navigateur dApp de Rabby/MetaMask.','amber');
+  if (!window.ethers) setStatus('Erreur: ethers.js ne s\'est pas chargé. Recharge la page.','bad'); else if (!window.ethereum) setStatus('Aucun wallet injecté détecté. Ouvre cette page dans le navigateur dApp de Rabby/MetaMask.','amber');
 })();
 </script>
 </body>
