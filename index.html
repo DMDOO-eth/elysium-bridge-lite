@@ -195,14 +195,28 @@
   ];
 
   const el = id => document.getElementById(id);
-  const l1ReadProvider = new ethers.JsonRpcProvider(HYPEREVM.rpc);
-  const l2Provider = new ethers.JsonRpcProvider(ELYSIUM.rpc);
   let browserProvider, signer, account, token, tokenAddress, tokenDecimals, tokenBalance, gateway, repAddress;
   let maxGas = 600000n;
 
   function short(a) { return a ? a.slice(0,6)+'…'+a.slice(-4) : '—'; }
   function setStatus(msg, kind='') { el('status').className='status '+kind; el('status').textContent=msg; }
   function parseErr(e) { return e?.shortMessage || e?.reason || e?.info?.error?.message || e?.message || String(e); }
+
+  async function getElysiumCode(address) {
+    try {
+      const response = await fetch(ELYSIUM.rpc, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_getCode',params:[address,'latest']})
+      });
+      if (!response.ok) return null;
+      const json = await response.json();
+      return typeof json?.result === 'string' ? json.result : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   function setStep(n) {
     for (let i=1;i<=4;i++) {
       const node=el('s'+i);
@@ -290,7 +304,7 @@
         while (cursor<linked.length) {
           const item=linked[cursor++];
           try {
-            const contract=new ethers.Contract(item.addr,ERC20_ABI,l1ReadProvider);
+            const contract=new ethers.Contract(item.addr,ERC20_ABI,browserProvider);
             const [bal,dec,sym]=await Promise.all([
               contract.balanceOf(account),
               contract.decimals(),
@@ -345,14 +359,19 @@
       gateway=ethers.getAddress(gw); repAddress=ethers.getAddress(rep);
       if (gateway.toLowerCase() !== STANDARD_GATEWAY.toLowerCase()) throw new Error('Custom gateway detected. This Lite version only supports the Elysium Standard Gateway.');
 
-      const code=await l2Provider.getCode(repAddress);
+      const code=await getElysiumCode(repAddress);
       const firstDeploy=code==='0x';
-      maxGas=firstDeploy ? 600000n : 300000n;
+      const deploymentKnown=code!==null;
+      maxGas=!deploymentKnown || firstDeploy ? 600000n : 300000n;
       el('meta').textContent=(name?name+' · ':'')+symbol+' · '+tokenDecimals+' decimals';
       el('balance').textContent=ethers.formatUnits(bal,tokenDecimals)+' '+symbol;
       el('gateway').textContent=gateway;
       el('rep').textContent=repAddress;
-      el('repState').textContent=firstDeploy?'First bridge — representation not deployed yet':'Representation already deployed';
+      el('repState').textContent=!deploymentKnown
+        ? 'Deployment status unavailable — safe 600k gas fallback'
+        : firstDeploy
+          ? 'First bridge — representation not deployed yet'
+          : 'Representation already deployed';
       el('tokenInfo').hidden=false;
       el('approveBtn').disabled=false;
       el('bridgeBtn').disabled=true;
