@@ -484,6 +484,7 @@
           ? t.evmContract
           : t?.evmContract?.address;
         if (!raw || !ethers.isAddress(raw)) continue;
+
         const addr=ethers.getAddress(raw);
         const key=addr.toLowerCase();
         if (seen.has(key)) continue;
@@ -493,92 +494,101 @@
 
       debugLog('spotMeta parsed',{tokens:allTokens.length,linked:linked.length});
       el('betaScanStats').textContent=
-        linked.length+' linked HyperEVM contracts found. Reading balances in batches…';
+        linked.length+' linked HyperEVM contracts found. Checking balances…';
 
       const iface=new ethers.Interface(ERC20_ABI);
       const balanceData=iface.encodeFunctionData('balanceOf',[account]);
+      const isMobile=window.matchMedia?.('(pointer:coarse)').matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      const workerCount=isMobile ? 4 : 8;
       const heldRaw=[];
-      const chunkSize=25;
+      let cursor=0;
+      let completed=0;
 
-      async function batchRpc(chunk,offset) {
-        debugLog('RPC batch start',{from:offset,count:chunk.length});
-        const controller=new AbortController();
-        const timeout=setTimeout(()=>controller.abort(),8000);
-        try {
-          const reqs=chunk.map((item,i)=>({
-            jsonrpc:'2.0',
-            id:offset+i+1,
-            method:'eth_call',
-            params:[{to:item.addr,data:balanceData},'latest']
-          }));
-          const res=await fetch(HYPEREVM.rpc,{
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify(reqs),
-            signal:controller.signal
-          });
-          debugLog('RPC batch HTTP',{from:offset,status:res.status,ok:res.ok});
-          if (!res.ok) throw new Error('RPC HTTP '+res.status);
-          const json=await res.json();
-          debugLog('RPC batch body',{from:offset,isArray:Array.isArray(json),items:Array.isArray(json)?json.length:null});
-          if (!Array.isArray(json)) throw new Error('RPC batch response unsupported');
-          const byId=new Map(json.map(x=>[x.id,x]));
-          for (let i=0;i<chunk.length;i++) {
-            const row=byId.get(offset+i+1);
-            if (!row?.result || row.error) continue;
-            try {
-              const [bal]=iface.decodeFunctionResult('balanceOf',row.result);
-              if (bal>0n) heldRaw.push({...chunk[i],balance:bal});
-            } catch (_) {}
-          }
-        } finally {
-          clearTimeout(timeout);
-        }
-      }
-
-      let fastScanWorked=true;
-      try {
-        for (let i=0;i<linked.length;i+=chunkSize) {
-          showScanLive('Scanning HyperEVM… '+heldRaw.length+' token'+(heldRaw.length===1?'':'s')+' found so far.');
-          await batchRpc(linked.slice(i,i+chunkSize),i);
-        }
-      } catch (fastError) {
-        fastScanWorked=false;
-        debugLog('fast scan failed',parseErr(fastError));
-        console.warn('Fast RPC batch scan unavailable:',fastError);
-      }
-
-      // Desktop-only fallback: injected wallets can handle the slow path.
-      // On mobile this is intentionally skipped; hundreds of injected eth_calls can stall the dApp browser.
-      if (!fastScanWorked) {
-        const isMobile=window.matchMedia?.('(pointer:coarse)').matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-        debugLog('fallback decision',{isMobile});
-        if (isMobile) {
-          throw new Error('Fast scan is not available in this mobile wallet browser yet. Open the manual address helper below — it works fine.');
-        }
-
-        showScanLive('Fast lane unavailable — doing the slower wallet scan…');
-        heldRaw.length=0;
-        for (const item of linked) {
+      async function rpcCall(to,data,id,attempts=2) {
+        let lastError;
+        for (let attempt=1; attempt<=attempts; attempt++) {
+          const controller=new AbortController();
+          const timeout=setTimeout(()=>controller.abort(),8000);
           try {
-            const contract=new ethers.Contract(item.addr,ERC20_ABI,browserProvider);
-            const bal=await contract.balanceOf(account);
-            if (bal>0n) heldRaw.push({...item,balance:bal});
-          } catch (_) {}
+            const res=await fetch(HYPEREVM.rpc,{
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({
+                jsonrpc:'2.0',
+                id,
+                method:'eth_call',
+                params:[{to,data},'latest']
+              }),
+              signal:controller.signal
+            });
+            if (!res.ok) throw new Error('RPC HTTP '+res.status);
+            const json=await res.json();
+            if (json?.error) throw new Error(json.error.message || 'RPC error');
+            if (typeof json?.result !== 'string') throw new Error('RPC result missing');
+            return json.result;
+          } catch(e) {
+            lastError=e;
+            if (attempt<attempts) await new Promise(r=>setTimeout(r,120*attempt));
+          } finally {
+            clearTimeout(timeout);
+          }
+        }
+        throw lastError;
+      }
+
+      async function worker(workerId) {
+        while (true) {
+          const index=cursor++;
+          if (index>=linked.length) return;
+          const item=linked[index];
+
+          try {
+            const raw=await rpcCall(item.addr,balanceData,index+1,2);
+            const [bal]=iface.decodeFunctionResult('balanceOf',raw);
+            if (bal>0n) {
+              heldRaw.push({...item,balance:bal});
+              showScanLive('Still scanning… '+heldRaw.length+' token'+(heldRaw.length===1?'':'s')+' found so far.');
+              debugLog('positive balance',{symbol:item.name,address:item.addr,raw:bal.toString()});
+            }
+          } catch(e) {
+            debugLog('balance check skipped',{address:item.addr,error:parseErr(e)});
+          }
+
+          completed++;
+          if (completed===1 || completed%40===0 || completed===linked.length) {
+            debugLog('scan progress',{checked:completed,total:linked.length,found:heldRaw.length});
+          }
         }
       }
+
+      debugLog('RPC single-call scan',{workers:workerCount,mobile:isMobile});
+      await Promise.all(Array.from({length:workerCount},(_,i)=>worker(i)));
 
       const held=[];
-      for (const item of heldRaw) {
-        const contract=new ethers.Contract(item.addr,ERC20_ABI,browserProvider);
+      for (let i=0;i<heldRaw.length;i++) {
+        const item=heldRaw[i];
         let dec=18;
         let sym=item.name || 'TOKEN';
-        try { dec=Number(await contract.decimals()); } catch (_) {}
-        try { sym=await contract.symbol() || sym; } catch (_) {}
+
+        try {
+          const data=iface.encodeFunctionData('decimals',[]);
+          const raw=await rpcCall(item.addr,data,5000+i,2);
+          const [value]=iface.decodeFunctionResult('decimals',raw);
+          dec=Number(value);
+        } catch (_) {}
+
+        try {
+          const data=iface.encodeFunctionData('symbol',[]);
+          const raw=await rpcCall(item.addr,data,6000+i,2);
+          const [value]=iface.decodeFunctionResult('symbol',raw);
+          sym=value || sym;
+        } catch (_) {}
+
         held.push({...item,decimals:dec,symbol:sym});
       }
 
       held.sort((a,b)=>a.symbol.localeCompare(b.symbol));
+
       const select=el('betaTokenSelect');
       select.innerHTML='';
       const first=document.createElement('option');
@@ -597,6 +607,7 @@
       el('betaUseBtn').disabled=true;
       hideScanLive();
       debugLog('scan done',{found:held.length});
+
       el('betaScanStats').textContent=held.length
         ? 'Done. Found '+held.length+' token'+(held.length===1?'':'s')+' on HyperEVM. Pick one.'
         : 'Scan finished, but nothing showed up. The manual address route below is the reliable fallback.';
