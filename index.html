@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#0b0f14" />
   <meta name="description" content="Ultra-light HyperEVM Testnet to Elysium Testnet ERC-20 bridge UI." />
   <title>Elysium Bridge Lite</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0f14'/%3E%3Cpath d='M12 32h32M34 22l10 10-10 10' fill='none' stroke='%2378aaff' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='17' cy='32' r='6' fill='%2350d890'/%3E%3C/svg%3E" />
   <style>
     :root { color-scheme:dark; --bg:#0b0f14; --panel:#121923; --line:#233044; --text:#eef4ff; --muted:#8fa2ba; --accent:#78aaff; --ok:#50d890; --warn:#ffc857; --bad:#ff6b6b; }
     * { box-sizing:border-box; }
@@ -77,8 +78,6 @@
       </div>
       <button id="connectBtn">Connect wallet</button>
     </div>
-    <a class="btnLink secondary wide" href="https://app.hyperliquid-testnet.xyz/portfolio" target="_blank" rel="noopener noreferrer">Open Hyperliquid Testnet Portfolio ↗</a>
-    </div>
   </section>
 
   <section class="card">
@@ -97,8 +96,8 @@
     <details id="betaScanBox">
       <summary>Beta · Scan HyperEVM token balances</summary>
       <div class="detailsBody">
-        <p class="small">Experimental diagnostic. It reads Hyperliquid testnet spot metadata, extracts linked HyperEVM contracts, then checks your connected wallet's ERC-20 balances. Nothing is signed.</p>
-        <button id="betaScanBtn" class="secondary wide" disabled>Run beta scan</button>
+        <p class="small">Temporary diagnostic mode. It first tests HARRR directly at its known HyperEVM ERC-20 address, then checks whether HARRR appears in Hyperliquid's spot metadata, and finally scans every linked EVM contract. Detailed diagnostics are printed to the browser console. Nothing is signed.</p>
+        <button id="betaScanBtn" class="secondary wide" disabled>Run HARRR + API debug scan</button>
         <div id="betaScanStats" class="small" style="margin-top:8px">Connect your wallet first.</div>
         <div id="betaScanResults" hidden>
           <label for="betaTokenSelect">Tokens found on HyperEVM</label>
@@ -175,6 +174,11 @@
     explorer:'https://elysium.kinetiq.xyz/testnet-explorer'
   };
   const HYPER_API = 'https://api.hyperliquid-testnet.xyz/info';
+  const DEBUG_HARRR = {
+    name:'HARRR',
+    tokenId:'0xdba2779d37628efc3967b98adf04172d',
+    evm:'0x923a9c790beed09868c9469c863476331d529478'
+  };
   const ROUTER = '0x1aAE2caD8B0249905492087EF230FcCEa3707C45';
   const STANDARD_GATEWAY = '0x792487eF5E423104bec94e8c58E814e5E0450cEA';
   const MAX_SUBMISSION = 400000000000000n;
@@ -269,8 +273,39 @@
     try {
       await switchHyperEVM();
       el('betaScanBtn').disabled=true;
-      el('betaScanStats').textContent='Loading Hyperliquid spot metadata…';
+      el('betaScanStats').textContent='Debugging HARRR and Hyperliquid metadata…';
 
+      console.group('[Elysium Bridge Lite] Beta token scan');
+      console.log('Connected wallet:', account);
+      console.log('Known HARRR identifiers:', DEBUG_HARRR);
+
+      // A. Direct sanity check against the HARRR ERC-20 we know is held by this test wallet.
+      let directHarrr=null;
+      try {
+        const harrrAddress=ethers.getAddress(DEBUG_HARRR.evm);
+        const harrrContract=new ethers.Contract(harrrAddress,ERC20_ABI,browserProvider);
+        const [code,bal,dec,sym,name]=await Promise.all([
+          browserProvider.getCode(harrrAddress),
+          harrrContract.balanceOf(account),
+          harrrContract.decimals(),
+          harrrContract.symbol().catch(()=>'?'),
+          harrrContract.name().catch(()=>'')
+        ]);
+        directHarrr={
+          address:harrrAddress,
+          codePresent:code!=='0x',
+          rawBalance:bal.toString(),
+          decimals:Number(dec),
+          formattedBalance:ethers.formatUnits(bal,Number(dec)),
+          symbol:sym,
+          name
+        };
+        console.log('DIRECT HARRR ERC-20 TEST:', directHarrr);
+      } catch (e) {
+        console.error('DIRECT HARRR ERC-20 TEST FAILED:', e);
+      }
+
+      // B. Pull Hyperliquid spot metadata and explicitly look for HARRR.
       const response=await fetch(HYPER_API,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
@@ -280,10 +315,32 @@
       const meta=await response.json();
       const allTokens=Array.isArray(meta?.tokens) ? meta.tokens : [];
 
+      console.log('RAW spotMeta response:', meta);
+      console.table(allTokens.map((t,i)=>({
+        i,
+        name:t?.name ?? '',
+        tokenId:t?.tokenId ?? '',
+        evmContract:typeof t?.evmContract==='string'
+          ? t.evmContract
+          : (t?.evmContract?.address ?? ''),
+        evmContractType:typeof t?.evmContract
+      })));
+
+      const harrrMatches=allTokens.filter(t => {
+        const name=(t?.name || '').toUpperCase();
+        const tokenId=(t?.tokenId || '').toLowerCase();
+        const raw=typeof t?.evmContract==='string' ? t.evmContract : t?.evmContract?.address;
+        return name==='HARRR'
+          || tokenId===DEBUG_HARRR.tokenId.toLowerCase()
+          || (typeof raw==='string' && raw.toLowerCase()===DEBUG_HARRR.evm.toLowerCase());
+      });
+      console.log('HARRR matches inside spotMeta:', harrrMatches);
+
+      // C. Extract linked contracts and test every balance, logging successes and failures.
       const seen=new Set();
       const linked=[];
       for (const t of allTokens) {
-        const raw = typeof t?.evmContract === 'string'
+        const raw=typeof t?.evmContract==='string'
           ? t.evmContract
           : t?.evmContract?.address;
         if (!raw || !ethers.isAddress(raw)) continue;
@@ -291,15 +348,21 @@
         const key=addr.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
-        linked.push({addr,name:t.name || 'TOKEN',tokenId:t.tokenId || ''});
+        linked.push({addr,name:t.name || 'TOKEN',tokenId:t.tokenId || '',raw:t});
       }
 
-      el('betaScanStats').textContent =
-        'Metadata: '+allTokens.length+' spot tokens · '+linked.length+' linked HyperEVM contracts · checking balances…';
+      console.log('Linked HyperEVM contracts extracted:', linked.length);
+      console.table(linked.map(x=>({name:x.name,tokenId:x.tokenId,address:x.addr})));
+      el('betaScanStats').textContent=
+        'Direct HARRR: '+(directHarrr ? directHarrr.formattedBalance+' '+directHarrr.symbol : 'FAILED')+
+        ' · spotMeta tokens: '+allTokens.length+
+        ' · HARRR matches: '+harrrMatches.length+
+        ' · linked contracts: '+linked.length+
+        ' · checking balances…';
 
       const held=[];
       let cursor=0;
-      const workers=Math.min(8,Math.max(1,linked.length));
+      const workers=Math.min(6,Math.max(1,linked.length));
       async function worker() {
         while (cursor<linked.length) {
           const item=linked[cursor++];
@@ -310,13 +373,25 @@
               contract.decimals(),
               contract.symbol().catch(()=>item.name)
             ]);
-            if (bal>0n) held.push({
-              ...item,
-              balance:bal,
+            const result={
+              name:item.name,
+              tokenId:item.tokenId,
+              address:item.addr,
+              rawBalance:bal.toString(),
               decimals:Number(dec),
+              balance:ethers.formatUnits(bal,Number(dec)),
               symbol:sym || item.name
+            };
+            console.log('ERC-20 balance check OK:', result);
+            if (bal>0n) held.push({...item,balance:bal,decimals:Number(dec),symbol:sym || item.name});
+          } catch (e) {
+            console.warn('ERC-20 balance check FAILED:', {
+              name:item.name,
+              tokenId:item.tokenId,
+              address:item.addr,
+              error:parseErr(e)
             });
-          } catch (_) {}
+          }
         }
       }
       await Promise.all(Array.from({length:workers},worker));
@@ -336,10 +411,28 @@
       }
       el('betaScanResults').hidden=false;
       el('betaUseBtn').disabled=true;
-      el('betaScanStats').textContent =
-        'Metadata: '+allTokens.length+' spot tokens · '+linked.length+' linked HyperEVM contracts · '+held.length+' positive wallet balance'+(held.length===1?'':'s')+'.';
+
+      const harrrApiText=harrrMatches.length ? 'YES' : 'NO';
+      const directText=directHarrr
+        ? directHarrr.formattedBalance+' '+directHarrr.symbol
+        : 'FAILED';
+      el('betaScanStats').textContent=
+        'Direct HARRR balance: '+directText+
+        ' · HARRR in spotMeta: '+harrrApiText+
+        ' · '+linked.length+' linked contracts'+
+        ' · '+held.length+' positive balance'+(held.length===1?'':'s')+
+        '. Open DevTools Console for full details.';
+
+      console.log('FINAL positive balances:', held.map(h=>({
+        symbol:h.symbol,
+        address:h.addr,
+        balance:ethers.formatUnits(h.balance,h.decimals)
+      })));
+      console.groupEnd();
     } catch(e) {
-      el('betaScanStats').textContent='Beta scan error: '+parseErr(e);
+      console.error('[Elysium Bridge Lite] Beta scan fatal error:', e);
+      try { console.groupEnd(); } catch (_) {}
+      el('betaScanStats').textContent='Beta scan error: '+parseErr(e)+' — open DevTools Console for details.';
     } finally {
       el('betaScanBtn').disabled=false;
     }
