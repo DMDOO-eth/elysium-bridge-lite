@@ -844,6 +844,11 @@
       }
       saveScanCache(held);
       hideScanLive();
+
+      if (held.length && select.options.length && select.options[0].value==='') {
+        select.options[0].textContent='Pick one…';
+      }
+
       debugLog('scan done',{found:held.length});
 
       el('betaScanStats').textContent=held.length
