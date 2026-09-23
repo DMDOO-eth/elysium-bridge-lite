@@ -72,7 +72,11 @@
 
   <section class="card">
     <div class="row">
-      <div><b>Wallet</b><div id="walletText" class="small">Not connected</div></div>
+      <div style="min-width:0">
+        <b>Wallet</b>
+        <div id="walletText" class="small">Not connected</div>
+        <a id="walletExplorerLink" class="small" href="#" target="_blank" rel="noopener noreferrer" hidden>Open connected wallet in HyperEVM Explorer ↗</a>
+      </div>
       <button id="connectBtn">Connect wallet</button>
     </div>
   </section>
@@ -84,6 +88,12 @@
       <label for="tokenSelect">Tokens found</label>
       <select id="tokenSelect"></select>
       <div id="scanHint" class="small" style="margin-top:5px"></div>
+    </div>
+
+    <div class="status" style="margin-top:12px">
+      <strong>Token not listed?</strong>
+      <div class="small" style="margin-top:4px">Open your connected wallet in the HyperEVM Explorer, find the token you want to bridge, copy its <b>ERC-20 contract address</b>, then paste it below.</div>
+      <a id="walletExplorerTokenLink" class="btnLink secondary wide" href="#" target="_blank" rel="noopener noreferrer" hidden>Open my wallet in HyperEVM Explorer ↗</a>
     </div>
 
     <label for="token">ERC-20 contract address</label>
@@ -215,6 +225,11 @@
     signer = await browserProvider.getSigner();
     account = await signer.getAddress();
     el('walletText').textContent=short(account)+' · HyperEVM Testnet';
+    const walletUrl=HYPEREVM.explorer+'/address/'+account;
+    el('walletExplorerLink').href=walletUrl;
+    el('walletExplorerLink').hidden=false;
+    el('walletExplorerTokenLink').href=walletUrl;
+    el('walletExplorerTokenLink').hidden=false;
   }
 
   async function connect() {
@@ -285,7 +300,7 @@
       }
       el('tokenListWrap').hidden=false;
       el('scanHint').textContent='Best-effort scan of HyperCore tokens that expose a HyperEVM ERC-20 contract. Native HYPE and arbitrary unlinked ERC-20s are not included.';
-      setStatus(held.length ? held.length+' token'+(held.length===1?'':'s')+' found.' : 'No linked token balance found. You can still paste any ERC-20 address manually.',held.length?'ok':'amber');
+      setStatus(held.length ? held.length+' token'+(held.length===1?'':'s')+' found.' : 'No linked token balance found. Open your wallet in the HyperEVM Explorer, copy the ERC-20 contract address of the token you want, and paste it below.',held.length?'ok':'amber');
     } catch(e) {
       setStatus('Token scan failed: '+parseErr(e)+' You can still paste an ERC-20 address manually.','bad');
     } finally {
