@@ -376,6 +376,41 @@
     el('useReturnHistoryBtn').disabled=true;
   }
 
+  let rpcReadId=10000;
+  async function rpcEthCall(rpc,to,data,label='eth_call') {
+    const controller=new AbortController();
+    const timeout=setTimeout(()=>controller.abort(),8000);
+    try {
+      const res=await fetch(rpc,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          jsonrpc:'2.0',
+          id:rpcReadId++,
+          method:'eth_call',
+          params:[{to,data},'latest']
+        }),
+        signal:controller.signal
+      });
+      if (!res.ok) throw new Error('RPC HTTP '+res.status);
+      const json=await res.json();
+      if (json?.error) throw new Error(json.error.message || 'RPC error');
+      if (typeof json?.result !== 'string') throw new Error('RPC result missing');
+      return json.result;
+    } catch(e) {
+      debugLog(label+' failed',{to,error:parseErr(e)});
+      throw e;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function readContract(rpc,address,iface,fn,args=[],label=fn) {
+    const data=iface.encodeFunctionData(fn,args);
+    const raw=await rpcEthCall(rpc,address,data,label);
+    return iface.decodeFunctionResult(fn,raw);
+  }
+
   async function getElysiumCode(address) {
     try {
       const response = await fetch(ELYSIUM.rpc, {
@@ -626,20 +661,60 @@
     try {
       await switchHyperEVM();
       tokenAddress=ethers.getAddress(el('token').value.trim());
-      token=new ethers.Contract(tokenAddress,ERC20_ABI,signer);
-      const router=new ethers.Contract(ROUTER,ROUTER_ABI,signer);
-      const [name,symbol,decimals,bal,gw,rep] = await Promise.all([
-        token.name().catch(()=>''), token.symbol(), token.decimals(), token.balanceOf(account),
-        router.getGateway(tokenAddress), router.calculateL2TokenAddress(tokenAddress)
+      setStatus('Checking token + bridge route…','amber');
+      debugLog('inspect token start',{token:tokenAddress});
+
+      const ercIface=new ethers.Interface(ERC20_ABI);
+      const routerIface=new ethers.Interface(ROUTER_ABI);
+
+      // Mobile wallet browsers can be flaky for read-only contract calls.
+      // Use the public HyperEVM RPC for reads; keep Rabby only for signatures/transactions.
+      const [symbolResult,decimalsResult,balanceResult,gatewayResult,repResult] = await Promise.all([
+        readContract(HYPEREVM.rpc,tokenAddress,ercIface,'symbol',[],'token symbol'),
+        readContract(HYPEREVM.rpc,tokenAddress,ercIface,'decimals',[],'token decimals'),
+        readContract(HYPEREVM.rpc,tokenAddress,ercIface,'balanceOf',[account],'token balance'),
+        readContract(HYPEREVM.rpc,ROUTER,routerIface,'getGateway',[tokenAddress],'router getGateway'),
+        readContract(HYPEREVM.rpc,ROUTER,routerIface,'calculateL2TokenAddress',[tokenAddress],'router calculateL2TokenAddress')
       ]);
-      tokenSymbol=symbol; tokenDecimals=Number(decimals); tokenBalance=bal;
-      gateway=ethers.getAddress(gw); repAddress=ethers.getAddress(rep);
-      if (gateway.toLowerCase() !== STANDARD_GATEWAY.toLowerCase()) throw new Error('Custom gateway detected. This Lite version only supports the Elysium Standard Gateway.');
+
+      let name='';
+      try {
+        const result=await readContract(HYPEREVM.rpc,tokenAddress,ercIface,'name',[],'token name');
+        name=result[0] || '';
+      } catch (_) {}
+
+      const symbol=symbolResult[0];
+      const decimals=decimalsResult[0];
+      const bal=balanceResult[0];
+      const gw=gatewayResult[0];
+      const rep=repResult[0];
+
+      tokenSymbol=symbol;
+      tokenDecimals=Number(decimals);
+      tokenBalance=bal;
+      gateway=ethers.getAddress(gw);
+      repAddress=ethers.getAddress(rep);
+
+      debugLog('inspect route resolved',{
+        token:tokenAddress,
+        symbol,
+        gateway,
+        representation:repAddress,
+        balance:bal.toString()
+      });
+
+      if (gateway.toLowerCase() !== STANDARD_GATEWAY.toLowerCase()) {
+        throw new Error('Custom gateway detected. This Lite version only supports the Elysium Standard Gateway.');
+      }
+
+      // Only create the signer-backed instance after all read-only checks passed.
+      token=new ethers.Contract(tokenAddress,ERC20_ABI,signer);
 
       const code=await getElysiumCode(repAddress);
       const firstDeploy=code==='0x';
       const deploymentKnown=code!==null;
       maxGas=!deploymentKnown || firstDeploy ? 600000n : 300000n;
+
       el('meta').textContent=(name?name+' · ':'')+symbol+' · '+tokenDecimals+' decimals';
       el('balance').textContent=ethers.formatUnits(bal,tokenDecimals)+' '+symbol;
       el('gateway').textContent=gateway;
@@ -649,15 +724,20 @@
         : firstDeploy
           ? 'First bridge — representation not deployed yet'
           : 'Representation already deployed';
+
       el('tokenInfo').hidden=false;
       el('approveBtn').disabled=false;
       el('returnToken').value=tokenAddress;
       el('bridgeBtn').disabled=true;
+
       const fee=MAX_SUBMISSION + maxGas*GAS_PRICE_BID;
       el('feeText').textContent='Provisioned delivery value: '+ethers.formatEther(fee)+' HYPE · maxGas '+maxGas;
       setStep(3);
       setStatus('Token looks good. Choose an amount.','ok');
-    } catch(e) { setStatus(parseErr(e),'bad'); }
+    } catch(e) {
+      debugLog('inspect token error',parseErr(e));
+      setStatus(parseErr(e),'bad');
+    }
   }
 
   function setReturnStatus(msg, kind='') {
@@ -761,17 +841,31 @@
     try {
       await switchHyperEVM();
       const units=amountUnits();
-      const allowance=await token.allowance(account,gateway);
+      const ercIface=new ethers.Interface(ERC20_ABI);
+      const allowanceResult=await readContract(
+        HYPEREVM.rpc,
+        tokenAddress,
+        ercIface,
+        'allowance',
+        [account,gateway],
+        'token allowance'
+      );
+      const allowance=allowanceResult[0];
+
       if (allowance<units) {
         setStatus('Approval time — check your wallet.','amber');
         const tx=await token.approve(gateway,units);
         setStatus('Approval sent. Waiting for confirmation: '+tx.hash,'amber');
         await tx.wait();
       }
+
       el('bridgeBtn').disabled=false;
       setStep(4);
       setStatus('Approval confirmed. One more click.','ok');
-    } catch(e) { setStatus(parseErr(e),'bad'); }
+    } catch(e) {
+      debugLog('approve error',parseErr(e));
+      setStatus(parseErr(e),'bad');
+    }
   }
 
   async function bridge() {
