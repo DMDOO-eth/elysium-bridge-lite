@@ -608,8 +608,14 @@
               const found={...item,balance:bal,decimals:dec,symbol:sym};
               held.push(found);
 
-              // First hit replaces the "Scanning…" placeholder. Later hits simply append.
-              if (held.length===1) select.innerHTML='';
+              // First hit replaces the "Scanning…" placeholder with a real picker.
+              if (held.length===1) {
+                select.innerHTML='';
+                const pick=document.createElement('option');
+                pick.value='';
+                pick.textContent='Pick one — scan is still running…';
+                select.appendChild(pick);
+              }
               const opt=document.createElement('option');
               opt.value=found.addr;
               opt.textContent=found.symbol+' · '+ethers.formatUnits(found.balance,found.decimals)+' · '+short(found.addr);
