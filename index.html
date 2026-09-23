@@ -96,7 +96,7 @@
     <details id="betaScanBox">
       <summary>Beta · Scan HyperEVM token balances</summary>
       <div class="detailsBody">
-        <p class="small">Temporary diagnostic mode. It first tests HARRR directly at its known HyperEVM ERC-20 address, then checks whether HARRR appears in Hyperliquid's spot metadata, and finally scans every linked EVM contract. Detailed diagnostics are printed to the browser console. Nothing is signed.</p>
+        <p class="small">Temporary diagnostic mode. It first tests HARRR directly, verifies HARRR in Hyperliquid spot metadata, then scans linked HyperEVM contracts with throttling and retries. A token is kept as soon as balanceOf is positive; symbol/decimals failures no longer discard it. Detailed diagnostics are printed to the browser console. Nothing is signed.</p>
         <button id="betaScanBtn" class="secondary wide" disabled>Run HARRR + API debug scan</button>
         <div id="betaScanStats" class="small" style="margin-top:8px">Connect your wallet first.</div>
         <div id="betaScanResults" hidden>
@@ -362,36 +362,89 @@
 
       const held=[];
       let cursor=0;
-      const workers=Math.min(6,Math.max(1,linked.length));
+      const workers=Math.min(2,Math.max(1,linked.length));
+
+      const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+
+      async function callWithRetry(fn,label,item,maxAttempts=3) {
+        let lastError;
+        for (let attempt=1; attempt<=maxAttempts; attempt++) {
+          try {
+            return await fn();
+          } catch (e) {
+            lastError=e;
+            console.warn(label+' attempt '+attempt+' failed:', {
+              name:item.name,
+              tokenId:item.tokenId,
+              address:item.addr,
+              error:parseErr(e)
+            });
+            if (attempt<maxAttempts) await sleep(120*attempt);
+          }
+        }
+        throw lastError;
+      }
+
       async function worker() {
         while (cursor<linked.length) {
           const item=linked[cursor++];
+          const contract=new ethers.Contract(item.addr,ERC20_ABI,browserProvider);
+
           try {
-            const contract=new ethers.Contract(item.addr,ERC20_ABI,browserProvider);
-            const [bal,dec,sym]=await Promise.all([
-              contract.balanceOf(account),
-              contract.decimals(),
-              contract.symbol().catch(()=>item.name)
-            ]);
+            // Balance is the only mandatory call. A metadata failure must not
+            // discard a token with a real positive balance.
+            const bal=await callWithRetry(
+              ()=>contract.balanceOf(account),
+              'balanceOf',
+              item
+            );
+
+            console.log('balanceOf OK:', {
+              name:item.name,
+              tokenId:item.tokenId,
+              address:item.addr,
+              rawBalance:bal.toString()
+            });
+
+            if (bal<=0n) continue;
+
+            let dec=18;
+            let sym=item.name || 'TOKEN';
+
+            try {
+              dec=Number(await callWithRetry(()=>contract.decimals(),'decimals',item,2));
+            } catch (e) {
+              console.warn('Using fallback decimals=18 for:', item.addr);
+            }
+
+            try {
+              sym=await callWithRetry(()=>contract.symbol(),'symbol',item,2) || sym;
+            } catch (e) {
+              console.warn('Using fallback symbol for:', item.addr);
+            }
+
             const result={
               name:item.name,
               tokenId:item.tokenId,
               address:item.addr,
               rawBalance:bal.toString(),
-              decimals:Number(dec),
-              balance:ethers.formatUnits(bal,Number(dec)),
-              symbol:sym || item.name
+              decimals:dec,
+              balance:ethers.formatUnits(bal,dec),
+              symbol:sym
             };
-            console.log('ERC-20 balance check OK:', result);
-            if (bal>0n) held.push({...item,balance:bal,decimals:Number(dec),symbol:sym || item.name});
+            console.log('POSITIVE ERC-20 BALANCE:', result);
+            held.push({...item,balance:bal,decimals:dec,symbol:sym});
           } catch (e) {
-            console.warn('ERC-20 balance check FAILED:', {
+            console.warn('ERC-20 BALANCE CHECK FAILED AFTER RETRIES:', {
               name:item.name,
               tokenId:item.tokenId,
               address:item.addr,
               error:parseErr(e)
             });
           }
+
+          // Be gentle with wallet/RPC providers; avoid hundreds of calls at once.
+          await sleep(40);
         }
       }
       await Promise.all(Array.from({length:workers},worker));
