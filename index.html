@@ -10,6 +10,7 @@
   <style>
     :root { color-scheme:dark; --bg:#0b0f14; --panel:#121923; --line:#233044; --text:#eef4ff; --muted:#8fa2ba; --accent:#78aaff; --ok:#50d890; --warn:#ffc857; --bad:#ff6b6b; }
     * { box-sizing:border-box; }
+    [hidden] { display:none !important; }
     body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
     main { width:min(640px,100%); margin:0 auto; padding:18px 14px 32px; }
     .hero { position:relative; min-height:230px; border-radius:18px; overflow:hidden; border:1px solid var(--line); margin-bottom:16px; background-image:linear-gradient(180deg,rgba(4,10,18,.18),rgba(4,10,18,.78)),url("assets/bridge-hero.svg"); background-size:cover; background-position:center; box-shadow:0 18px 60px rgba(0,0,0,.28); }
@@ -281,7 +282,7 @@
     return;
   }
 
-  const BUILD = '2026.09.24-return-ux-1';
+  const BUILD = '2026.09.24-wallet-hidden-fix-1';
   const HYPEREVM = {
     chainId:'0x3e6',
     name:'Hyperliquid EVM Testnet',
@@ -710,6 +711,10 @@
   }
 
   async function connect() {
+    if (!window.ethereum || typeof window.ethereum.request !== 'function') {
+      setStatus("No wallet detected. On desktop, enable your wallet extension. On mobile, open this page inside your wallet's dApp browser.",'amber');
+      return;
+    }
     try {
       await window.ethereum.request({method:'eth_requestAccounts'});
       await switchHyperEVM();
